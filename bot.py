@@ -118,6 +118,122 @@ async def ai_msg(user, purpose):
         defaults = {"morning":f"Morning {name}. Let's go.","midday":f"{done}/{total} done. Keep moving.","afternoon":f"Still time. {done}/{total} done.","night":f"Day done. {done}/{total} habits. {streak} streak.","all_done":f"All done. {streak} days straight.","start":f"Welcome {name}. One habit at a time."}
         return defaults.get(purpose,"Keep going.")
 
+# ── MOOD CHECK-IN ──────────────────────────────────────
+async def send_mood_checkin(context):
+    """Send daily mood check-in to all active users."""
+    for uid, user in users.items():
+        if user.get("step") != "active":
+            continue
+        today = datetime.now().strftime("%Y-%m-%d")
+        if user.get("mood_date") == today:
+            continue  # already checked in today
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=f"How are you feeling today, {user['name'] or 'champ'}?",
+                reply_markup=InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("Energised", callback_data="mood_high"),
+                        InlineKeyboardButton("Good", callback_data="mood_medium"),
+                    ],
+                    [
+                        InlineKeyboardButton("Tired", callback_data="mood_low"),
+                        InlineKeyboardButton("Struggling", callback_data="mood_very_low"),
+                    ],
+                ])
+            )
+        except Exception as e:
+            print(f"Mood checkin err {uid}: {e}")
+
+async def check_missed_days(context):
+    """Check for users who missed 2+ days and reach out personally."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_dt = datetime.now()
+    for uid, user in users.items():
+        if user.get("step") != "active":
+            continue
+        last = user.get("last_active_date")
+        if not last:
+            continue
+        try:
+            last_dt = datetime.strptime(last, "%Y-%m-%d")
+            days_missed = (today_dt - last_dt).days
+            if days_missed >= 2 and not user.get("missed_days_alerted"):
+                user["missed_days_alerted"] = True
+                name = user["name"] or "champ"
+                streak = user["streak"]
+                try:
+                    msg = await groq(
+                        f"{name} missed {days_missed} days. Streak was {streak}. Send a personal, direct message to bring them back. Not generic. Reference their streak. 2 sentences max.",
+                        "Direct habit coach. Personal outreach after missed days. No guilt. Just real talk. Max 2 sentences."
+                    )
+                except:
+                    msg = f"{days_missed} days gone, {name}. Your {streak}-day streak is waiting — one habit today brings it back."
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=f"{msg}\n\nSend /habit to get back on track.",
+
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("Get Today's Habits", callback_data="get_habits_now")
+                    ]])
+                )
+        except Exception as e:
+            print(f"Missed days err {uid}: {e}")
+
+async def detect_patterns(context):
+    """Weekly pattern detection — sent on Saturdays."""
+    for uid, user in users.items():
+        if user.get("step") != "active":
+            continue
+        history = user.get("weekly_history", [])
+        if len(history) < 7:
+            continue
+        week_str = datetime.now().strftime("%Y-W%W")
+        if user.get("pattern_sent_week") == week_str:
+            continue
+        try:
+            # Analyse patterns
+            day_count = {}
+            pillar_count = {}
+            mood_map = {}
+            for r in history[-14:]:
+                d = r.get("day_of_week", "")
+                day_count[d] = day_count.get(d, 0) + 1
+                for p in r.get("pillars", []):
+                    pillar_count[p] = pillar_count.get(p, 0) + 1
+
+            # Find weakest day (least check-ins)
+            all_days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+            weakest_day = min(all_days, key=lambda d: day_count.get(d, 0))
+            strongest_day = max(day_count, key=day_count.get) if day_count else "N/A"
+            least_pillar = min(pillar_count, key=pillar_count.get) if pillar_count else None
+            most_pillar = max(pillar_count, key=pillar_count.get) if pillar_count else None
+
+            summary = (
+                f"Weakest day: {weakest_day} ({day_count.get(weakest_day,0)} check-ins). "
+                f"Strongest day: {strongest_day}. "
+                f"Most done pillar: {PILLARS[most_pillar]['name'] if most_pillar else 'N/A'}. "
+                f"Least done pillar: {PILLARS[least_pillar]['name'] if least_pillar else 'N/A'}. "
+                f"Total days tracked: {len(history)}."
+            )
+            name = user["name"] or "champ"
+            try:
+                pattern_msg = await groq(
+                    f"Pattern analysis for {name}: {summary}. Write 2-3 punchy insights. Be specific. Tell them WHY they might struggle on {weakest_day} and what to do about it.",
+                    "Direct habit coach spotting behavioural patterns. Punchy insights. Reference actual data. Max 3 sentences."
+                )
+            except:
+                pattern_msg = f"You show up most on {strongest_day} and least on {weakest_day}. {PILLARS[least_pillar]['name'] if least_pillar else 'One pillar'} keeps getting skipped. Small tweak: do that one first thing on {weakest_day}."
+
+            await context.bot.send_message(
+                chat_id=uid,
+                text=f"Pattern detected, {name}.\n\n{pattern_msg}\n\nSend /status to see your full breakdown.",
+
+            )
+            user["pattern_sent_week"] = week_str
+        except Exception as e:
+            print(f"Pattern err {uid}: {e}")
+
 # ── WEEKLY REPORT ───────────────────────────────────────
 async def weekly_report(user):
     h7 = user.get("weekly_history",[])[-7:]
@@ -248,19 +364,20 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = get_user(uid)
     user["name"] = update.effective_user.first_name or "Hero"
     user["step"] = "welcome"
-    msg = await ai_msg(user, "start")
+    user["onboarding"] = "goals"  # track onboarding step
+    user["personal_goals"] = []   # reset goals on fresh start
     await update.message.reply_text(
-        f"CoreSix - 6 pillars. 3 habits. Every day.\n\n{msg}\n\n"
-        "Fuel - Move - Rest - Calm - Connect - Focus\n\n"
-        "Add personal goals and I build habits around them.\n"
-        "I send reminders 4x a day automatically.",
+        f"CoreSix - 6 pillars. 3 habits. Every day.\n\n"
+        f"Welcome {user['name']}. Let me set you up properly.\n\n"
+        f"Step 1 of 3 - Personal Goals\n\n"
+        f"What do you want to focus on? Add up to 5 goals.\n"
+        f"Examples: drink more water, eat more protein, sleep earlier...\n\n"
+        f"Type your first goal below, or tap Skip to continue.",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Set My Reminders", callback_data="show_reminders")],
-            [InlineKeyboardButton("Add Personal Goals", callback_data="add_goal")],
-            [InlineKeyboardButton("Quick Assessment", callback_data="assess")],
-            [InlineKeyboardButton("Skip - Start Now", callback_data="skip_assess")],
+            [InlineKeyboardButton("Skip Goals", callback_data="onboard_skip_goals")],
         ])
     )
+    user["adding_goal"] = True
 
 async def cmd_habit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -357,7 +474,46 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = get_user(uid)
     data = q.data
 
-    if data == "show_reminders":
+    # ── Onboarding flow ──
+    if data == "onboard_skip_goals":
+        user["adding_goal"] = False
+        user["onboarding"] = "reminders"
+        await q.edit_message_text(
+            "Step 2 of 3 - Daily Reminders\n\n"
+            "I will send you habits and nudges 4 times a day.\n"
+            "Tap each time to change it to suit your schedule.",
+            reply_markup=reminders_kb(user)
+        )
+
+    elif data == "onboard_done_reminders":
+        user["reminders_active"] = True
+        schedule_reminders(ctx.application, uid)
+        user["onboarding"] = "assess"
+        await q.edit_message_text(
+            "Step 3 of 3 - Quick Assessment\n\n"
+            "Rate each pillar 1-5 so I can personalise your habits.\n"
+            "1 = struggling   5 = thriving\n\n"
+            "Skip if you want to start right away.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Start Assessment", callback_data="assess")],
+                [InlineKeyboardButton("Skip - Start Now", callback_data="onboard_done")],
+            ])
+        )
+
+    elif data == "onboard_done":
+        user["step"] = "active"
+        user["onboarding"] = None
+        goals = user.get("personal_goals", [])
+        goal_text = "\n".join([f"- {g}" for g in goals]) if goals else "None set"
+        rem_text = "\n".join([f"{SLOTS[s]['label']}: {user['reminders'].get(s)}" for s in SLOTS])
+        await q.edit_message_text(
+            f"You are all set, {user['name']}!\n\n"
+            f"Goals:\n{goal_text}\n\n"
+            f"Reminders:\n{rem_text}\n\n"
+            f"Send /habit to get your first 3 habits now."
+        )
+
+    elif data == "show_reminders":
         await q.edit_message_text("Set Your Daily Reminders\nTap a time to change it.", reply_markup=reminders_kb(user))
 
     elif data == "toggle_reminders":
@@ -368,13 +524,36 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user["reminders_active"] = True
         schedule_reminders(ctx.application, uid)
         lines = "\n".join([f"{SLOTS[s]['label']}: {user['reminders'].get(s)}" for s in SLOTS])
-        await q.edit_message_text(f"Reminders activated!\n\n{lines}\n\nI will reach out 4 times a day. Send /habit anytime.")
+        if user.get("onboarding") == "reminders":
+            # Continue onboarding
+            user["onboarding"] = "assess"
+            await q.edit_message_text(
+                f"Reminders set!\n{lines}\n\n"
+                "Step 3 of 3 - Quick Assessment\n\n"
+                "Rate each pillar 1-5 so I can personalise your habits.\n"
+                "1 = struggling   5 = thriving",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Start Assessment", callback_data="assess")],
+                    [InlineKeyboardButton("Skip - Start Now", callback_data="onboard_done")],
+                ])
+            )
+        else:
+            await q.edit_message_text(f"Reminders activated!\n\n{lines}\n\nI will reach out 4 times a day. Send /habit anytime.")
 
     elif data.startswith("setslot_"):
         slot = data.replace("setslot_","")
         user["setting_slot"] = slot
         current = user["reminders"].get(slot, SLOTS[slot]["default"])
         await q.edit_message_text(f"Change {SLOTS[slot]['label']} reminder\n\nCurrent: {current}\n\nReply with time in HH:MM format\nExample: 08:30 or 21:00")
+
+    elif data == "add_another_goal":
+        user["adding_goal"] = True
+        goals = user.get("personal_goals",[])
+        await q.edit_message_text(
+            f"You have {len(goals)} goal(s) so far:\n" +
+            "\n".join([f"- {g}" for g in goals]) +
+            "\n\nType your next goal below:"
+        )
 
     elif data == "add_goal":
         user["adding_goal"] = True
@@ -424,7 +603,18 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             user["step"] = "active"
             ranked = sorted(PIDS, key=lambda p: user["scores"].get(p,3))
             lines = [f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {user['scores'][p]}/5" for p in ranked]
-            await q.edit_message_text("Assessment done!\n\nYour pillars:\n" + "\n".join(lines) + "\n\nAI picks your best 3 daily. Send /reminders to set up your schedule.")
+            if user.get("onboarding"):
+                user["onboarding"] = None
+                goals = user.get("personal_goals", [])
+                goal_text = "\n".join([f"- {g}" for g in goals]) if goals else "None set"
+                await q.edit_message_text(
+                    f"All set, {user['name']}!\n\n"
+                    f"Goals:\n{goal_text}\n\n"
+                    f"Your pillars (weakest first):\n" + "\n".join(lines) +
+                    "\n\nSend /habit to get your first 3 habits now."
+                )
+            else:
+                await q.edit_message_text("Assessment done!\n\nYour pillars:\n" + "\n".join(lines) + "\n\nAI picks your best 3 daily.")
 
     elif data.startswith("done_"):
         pid = data.replace("done_","")
@@ -437,6 +627,8 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             user["streak"] += 1
             today = datetime.now().strftime("%Y-%m-%d")
             user["last_checkin_date"] = today
+            user["last_active_date"] = today
+            user["missed_days_alerted"] = False
             user["weekly_history"].append({
                 "date": today,
                 "day_of_week": datetime.now().strftime("%A"),
@@ -473,12 +665,30 @@ async def cmd_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if len(goal) > 5:
             goals = user.get("personal_goals",[])
             if len(goals) >= 5:
-                await update.message.reply_text("You have 5 goals already. Send /goals to remove one first.")
+                user["adding_goal"] = False
+                await update.message.reply_text(
+                    "You have 5 goals already.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Continue to Reminders", callback_data="onboard_skip_goals")],
+                    ]) if user.get("onboarding") == "goals" else None
+                )
             else:
                 goals.append(goal)
                 user["personal_goals"] = goals
-                user["adding_goal"] = False
-                await update.message.reply_text(f"Goal added: {goal}\n\nYou now have {len(goals)} goal(s). AI will weave this into your daily habits.")
+                count = len(goals)
+                if user.get("onboarding") == "goals":
+                    await update.message.reply_text(
+                        f"Goal {count} added: {goal}\n\n"
+                        f"{'Add another goal, or continue to reminders.' if count < 5 else 'Maximum 5 goals reached.'}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("Add Another Goal", callback_data="add_another_goal")],
+                            [InlineKeyboardButton("Continue to Reminders", callback_data="onboard_skip_goals")],
+                        ])
+                    )
+                    user["adding_goal"] = False
+                else:
+                    await update.message.reply_text(f"Goal added: {goal}\n\nYou now have {count} goal(s). Send /goals to manage them.")
+                    user["adding_goal"] = False
         else:
             await update.message.reply_text("Please describe your goal in a bit more detail.")
         return
@@ -518,6 +728,12 @@ def main():
 
     # Sunday 8am UTC weekly report
     app.job_queue.run_daily(send_weekly_report, time=time(hour=8, minute=0, tzinfo=pytz.UTC), days=(6,), name="weekly_report")
+    # Daily 7am mood check-in
+    app.job_queue.run_daily(send_mood_checkin, time=time(hour=7, minute=0, tzinfo=pytz.UTC), name="mood_checkin")
+    # Daily 10am missed days check
+    app.job_queue.run_daily(check_missed_days, time=time(hour=10, minute=0, tzinfo=pytz.UTC), name="missed_days")
+    # Saturday 9am pattern detection
+    app.job_queue.run_daily(detect_patterns, time=time(hour=9, minute=0, tzinfo=pytz.UTC), days=(5,), name="patterns")
 
     print("CoreSix bot is running...")
     app.run_polling(drop_pending_updates=True)
