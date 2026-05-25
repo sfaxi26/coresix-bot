@@ -14,44 +14,51 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TOKEN_HERE")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 # ── AI ──────────────────────────────────────────────────
-import urllib.request
 import json as _json
+import asyncio as _asyncio
 
-def call_groq(prompt, system):
-    """Call Groq API synchronously."""
+async def _call_groq_async(prompt, system):
+    """Call Groq API using httpx."""
+    import httpx
     if not GROQ_API_KEY:
         return ""
-    try:
-        payload = _json.dumps({
-            "model": "llama-3.3-70b-versatile",
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt}
-            ],
-            "max_tokens": 300,
-            "temperature": 0.85,
-        }).encode()
-        req = urllib.request.Request(
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 300,
+        "temperature": 0.85,
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
             "https://api.groq.com/openai/v1/chat/completions",
-            data=payload,
+            json=payload,
             headers={
                 "Authorization": f"Bearer {GROQ_API_KEY}",
                 "Content-Type": "application/json",
-            },
-            method="POST"
+            }
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read())
-            return data["choices"][0]["message"]["content"].strip()
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"].strip()
+
+def call_groq(prompt, system):
+    """Sync wrapper for Groq API call."""
+    if not GROQ_API_KEY:
+        return ""
+    try:
+        loop = _asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(_asyncio.run, _call_groq_async(prompt, system))
+                return future.result(timeout=20)
+        else:
+            return loop.run_until_complete(_call_groq_async(prompt, system))
     except Exception as e:
-        import traceback
         print(f"Groq error: {e}")
-        print(f"Groq full error: {traceback.format_exc()}")
-        # Try to read response body for more details
-        try:
-            print(f"Groq response body: {e.read().decode()}")
-        except:
-            pass
         return ""
 
 # ── DATA ────────────────────────────────────────────────
