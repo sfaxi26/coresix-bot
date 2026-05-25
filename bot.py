@@ -44,7 +44,14 @@ def call_groq(prompt, system):
             data = _json.loads(resp.read())
             return data["choices"][0]["message"]["content"].strip()
     except Exception as e:
+        import traceback
         print(f"Groq error: {e}")
+        print(f"Groq full error: {traceback.format_exc()}")
+        # Try to read response body for more details
+        try:
+            print(f"Groq response body: {e.read().decode()}")
+        except:
+            pass
         return ""
 
 # ── DATA ────────────────────────────────────────────────
