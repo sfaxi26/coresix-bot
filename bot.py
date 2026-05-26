@@ -4,7 +4,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # ── FILE STORAGE ─────────────────────────────────────────
 DATA_FILE = "/app/coresix_users.json"
@@ -77,6 +78,7 @@ def get_user(uid):
                 "sleep_quality":None, "stress_level":None,
             },
             "profile_step":None,
+            "macro_log":[],  # list of daily macro entries
         }
     return users[uid]
 
@@ -337,6 +339,59 @@ def habit_kb(user):
         btns.append([InlineKeyboardButton(label, callback_data=f"done_{p}")])
     return InlineKeyboardMarkup(btns) if btns else None
 
+TIMEZONES = {
+    # Americas
+    "New York (EST)":     "America/New_York",
+    "Chicago (CST)":      "America/Chicago",
+    "Denver (MST)":       "America/Denver",
+    "Los Angeles (PST)":  "America/Los_Angeles",
+    "Toronto":            "America/Toronto",
+    "Mexico City":        "America/Mexico_City",
+    "Sao Paulo":          "America/Sao_Paulo",
+    # Europe
+    "London (GMT)":       "Europe/London",
+    "Paris (CET)":        "Europe/Paris",
+    "Berlin":             "Europe/Berlin",
+    "Madrid":             "Europe/Madrid",
+    "Rome":               "Europe/Rome",
+    "Amsterdam":          "Europe/Amsterdam",
+    "Stockholm":          "Europe/Stockholm",
+    # Middle East & Africa
+    "Dubai (GST)":        "Asia/Dubai",
+    "Riyadh":             "Asia/Riyadh",
+    "Cairo":              "Africa/Cairo",
+    "Istanbul":           "Europe/Istanbul",
+    "Tel Aviv":           "Asia/Jerusalem",
+    "Nairobi":            "Africa/Nairobi",
+    # Asia & Pacific
+    "Mumbai (IST)":       "Asia/Kolkata",
+    "Singapore":          "Asia/Singapore",
+    "Hong Kong":          "Asia/Hong_Kong",
+    "Tokyo":              "Asia/Tokyo",
+    "Sydney":             "Australia/Sydney",
+    "Auckland":           "Pacific/Auckland",
+}
+
+TZ_REGIONS = {
+    "Americas":       ["New York (EST)","Chicago (CST)","Denver (MST)","Los Angeles (PST)","Toronto","Mexico City","Sao Paulo"],
+    "Europe":         ["London (GMT)","Paris (CET)","Berlin","Madrid","Rome","Amsterdam","Stockholm"],
+    "Middle East":    ["Dubai (GST)","Riyadh","Cairo","Istanbul","Tel Aviv","Nairobi"],
+    "Asia & Pacific": ["Mumbai (IST)","Singapore","Hong Kong","Tokyo","Sydney","Auckland"],
+}
+
+def tz_region_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(region, callback_data=f"tz_region_{region}")]
+        for region in TZ_REGIONS
+    ])
+
+def tz_city_kb(region):
+    cities = TZ_REGIONS.get(region, [])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(city, callback_data=f"tz_set_{city}")]
+        for city in cities
+    ])
+
 def reminders_kb(user):
     btns = [[InlineKeyboardButton(f"{SLOTS[s]['label']} - {user['reminders'].get(s,SLOTS[s]['default'])}", callback_data=f"setslot_{s}")] for s in SLOTS]
     status = "ON" if user["reminders_active"] else "OFF"
@@ -352,6 +407,151 @@ def goals_kb(goals):
 
 def score_kb(pid):
     return InlineKeyboardMarkup([[InlineKeyboardButton(str(n), callback_data=f"score_{pid}_{n}") for n in range(1,6)]])
+
+# ── FOOD PHOTO ANALYSIS ─────────────────────────────────
+async def analyse_food_photo(image_bytes, mime_type="image/jpeg"):
+    """Send food photo to Gemini Vision and get macro breakdown."""
+    import httpx, base64
+    if not GEMINI_API_KEY:
+        return None
+    b64 = base64.b64encode(image_bytes).decode()
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}",
+                json={
+                    "contents": [{
+                        "parts": [
+                            {"inline_data": {"mime_type": mime_type, "data": b64}},
+                            {"text": (
+                                "Analyse this food photo and estimate the macronutrients. "
+                                "Identify each food item visible. Estimate realistic portion sizes. "
+                                "Return ONLY valid JSON, no markdown: "
+                                '{"foods":["food1"],"calories":0,"protein_g":0,"carbs_g":0,"fat_g":0,"fibre_g":0,"confidence":"high/medium/low","notes":"notes"}'
+                            )}
+                        ]
+                    }],
+                    "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500}
+                }
+            )
+            r.raise_for_status()
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            clean = text.strip().replace("```json","").replace("```","").strip()
+            return json.loads(clean)
+    except Exception as e:
+        print(f"Gemini error: {e}")
+        return None
+
+async def handle_food_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle photo messages — analyse food and calculate macros."""
+    uid = update.effective_user.id
+    user = get_user(uid)
+
+    if not GEMINI_API_KEY:
+        await update.message.reply_text(
+            "Food photo analysis not set up yet.\n\nAdd GEMINI_API_KEY to Railway Variables to enable this feature."
+        )
+        return
+
+    await update.message.reply_text("Analysing your meal... give me a moment!")
+
+    try:
+        # Get the largest photo size
+        photo = update.message.photo[-1]
+        file = await ctx.bot.get_file(photo.file_id)
+        image_bytes = await file.download_as_bytearray()
+
+        result = await analyse_food_photo(bytes(image_bytes))
+
+        if not result:
+            await update.message.reply_text(
+                "Could not analyse this photo. Try a clearer photo with better lighting."
+            )
+            return
+
+        foods = result.get("foods", [])
+        calories = result.get("calories", 0)
+        protein = result.get("protein_g", 0)
+        carbs = result.get("carbs_g", 0)
+        fat = result.get("fat_g", 0)
+        fibre = result.get("fibre_g", 0)
+        confidence = result.get("confidence", "medium")
+        notes = result.get("notes", "")
+
+        # Log to user's macro history
+        entry = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "time": datetime.now().strftime("%H:%M"),
+            "foods": foods,
+            "calories": calories,
+            "protein_g": protein,
+            "carbs_g": carbs,
+            "fat_g": fat,
+            "fibre_g": fibre,
+        }
+        user["macro_log"].append(entry)
+        user["macro_log"] = user["macro_log"][-30:]  # keep 30 days
+        save_users()
+
+        # Calculate today's totals
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_entries = [e for e in user["macro_log"] if e["date"] == today]
+        total_cal = sum(e["calories"] for e in today_entries)
+        total_protein = sum(e["protein_g"] for e in today_entries)
+        total_carbs = sum(e["carbs_g"] for e in today_entries)
+        total_fat = sum(e["fat_g"] for e in today_entries)
+        total_fibre = sum(e["fibre_g"] for e in today_entries)
+
+        conf_emoji = "✅" if confidence=="high" else "⚠️" if confidence=="medium" else "❓"
+
+        msg = (
+            f"Meal Analysis {conf_emoji}\n\n"
+            f"Foods: {', '.join(foods)}\n\n"
+            f"This meal:\n"
+            f"Calories: {calories} kcal\n"
+            f"Protein: {protein}g\n"
+            f"Carbs: {carbs}g\n"
+            f"Fat: {fat}g\n"
+            f"Fibre: {fibre}g"
+        )
+
+        if notes:
+            msg += f"\n\nNote: {notes}"
+
+        if len(today_entries) > 1:
+            msg += (
+                f"\n\nToday total ({len(today_entries)} meals):\n"
+                f"Calories: {total_cal} kcal | Protein: {total_protein}g | Carbs: {total_carbs}g | Fat: {total_fat}g"
+            )
+
+
+        # AI coaching tip based on macros and user goals
+        goals = user.get("personal_goals", [])
+        profile = user.get("profile", {})
+        try:
+            tip = await groq(
+                f"User ate: {', '.join(foods)}. Macros: {protein}g protein, {carbs}g carbs, {fat}g fat, {calories}kcal. "
+                f"Their goals: {', '.join(goals) if goals else 'none'}. "
+                f"Profile: age {profile.get('age','?')}, conditions: {', '.join(profile.get('conditions',[]))}. "
+                f"Give one specific, actionable nutrition tip based on this meal. Max 2 sentences.",
+                "Evidence-based nutrition coach. Short punchy advice. Reference actual foods eaten.",
+                max_tokens=80
+            )
+            if tip:
+                msg += f"\n\nCoach tip: {tip}"
+        except:
+            pass
+
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("View Today's Nutrition", callback_data="view_macros")],
+            [InlineKeyboardButton("Log Another Meal", callback_data="prompt_photo")],
+        ]))
+
+    except Exception as e:
+        print(f"Photo handler error: {e}")
+        await update.message.reply_text(
+            "Something went wrong analysing the photo. Try again with a clearer image."
+        )
 
 # ── COMMANDS ─────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -407,6 +607,16 @@ async def cmd_assess(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     p = PILLARS[PIDS[0]]
     await update.message.reply_text(f"Rate each pillar 1-5.\n1 = struggling - 5 = thriving\n\n{p['emoji']} {p['name']} - {p['desc']}", reply_markup=score_kb(PIDS[0]))
 
+async def cmd_timezone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    user = get_user(uid)
+    current = user.get("timezone","UTC")
+    await update.message.reply_text(
+        f"Your timezone: {current}\n\nChange it by picking your region:",
+        reply_markup=tz_region_kb()
+    )
+
+
 async def cmd_reminders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
@@ -441,6 +651,37 @@ async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Clear Profile", callback_data="profile_clear")],
         ])
     )
+
+async def cmd_macros(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show today's macro summary."""
+    uid = update.effective_user.id
+    user = get_user(uid)
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_entries = [e for e in user.get("macro_log",[]) if e["date"]==today]
+
+    if not today_entries:
+        await update.message.reply_text("No meals logged today. Send a photo of your food to log it!")
+        return
+
+    total_cal = sum(e["calories"] for e in today_entries)
+    total_protein = sum(e["protein_g"] for e in today_entries)
+    total_carbs = sum(e["carbs_g"] for e in today_entries)
+    total_fat = sum(e["fat_g"] for e in today_entries)
+    total_fibre = sum(e["fibre_g"] for e in today_entries)
+
+    lines = [f"Today's Nutrition - {len(today_entries)} meals\n"]
+    for i, e in enumerate(today_entries, 1):
+        lines.append(f"{i}. {', '.join(e['foods'])} - {e['calories']}kcal ({e['time']})")
+
+    lines.append("\nTotals:")
+    lines.append(f"Calories: {total_cal} kcal")
+    lines.append(f"Protein: {total_protein}g")
+    lines.append(f"Carbs: {total_carbs}g")
+    lines.append(f"Fat: {total_fat}g")
+    lines.append(f"Fibre: {total_fibre}g")
+
+    await update.message.reply_text("\n".join(lines))
+
 
 async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -661,12 +902,12 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         lines = "\n".join([f"{SLOTS[s]['label']}: {user['reminders'].get(s)}" for s in SLOTS])
         if user.get("onboarding") == "reminders":
             user["onboarding"] = "assess"
+            tz = user.get("timezone","UTC")
             await q.edit_message_text(
-                f"Reminders set! I will reach out 4 times a day.\n\n{lines}\n\n"
-                "Step 3 of 4 - Rate Your Pillars\n\n"
-                "How are you doing in each area of your life?\n"
-                "1 = struggling   5 = thriving\n\n"
-                "This takes 60 seconds and personalises your habits.",
+                f"Reminders set! ({tz})\n\n{lines}\n\n"
+                "Step 4 of 5 - Rate Your Pillars\n\n"
+                "How are you doing in each area? 1=struggling  5=thriving\n\n"
+                "Takes 60 seconds and personalises your habits.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("Start Rating Now", callback_data="assess")],
                     [InlineKeyboardButton("Skip This Step", callback_data="onboard_to_profile")],
@@ -742,6 +983,28 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await q.edit_message_text(
                     "Assessment done!\n\nYour pillars:\n" + "\n".join(lines) + "\n\nSend /habit to get your first 3 habits."
                 )
+
+    # ── Macros ──
+    elif data == "view_macros":
+        uid2 = q.from_user.id
+        user2 = get_user(uid2)
+        today = datetime.now().strftime("%Y-%m-%d")
+        entries = [e for e in user2.get("macro_log",[]) if e["date"]==today]
+        if not entries:
+            await q.edit_message_text("No meals logged today. Send a photo of your food!")
+            return
+        total_cal = sum(e["calories"] for e in entries)
+        total_p = sum(e["protein_g"] for e in entries)
+        total_c = sum(e["carbs_g"] for e in entries)
+        total_f = sum(e["fat_g"] for e in entries)
+        lines = [f"Today - {len(entries)} meals\n"]
+        for i,e in enumerate(entries,1):
+            lines.append(f"{i}. {', '.join(e['foods'])} ({e['time']}) - {e['calories']}kcal")
+        lines.append(f"\nTotal: {total_cal}kcal | P:{total_p}g | C:{total_c}g | F:{total_f}g")
+        await q.edit_message_text("\n".join(lines))
+
+    elif data == "prompt_photo":
+        await q.edit_message_text("Send a photo of your next meal and I will analyse it!")
 
     # ── Habit done ──
     elif data.startswith("done_"):
@@ -904,9 +1167,12 @@ def main():
     app.add_handler(CommandHandler("status",    cmd_status))
     app.add_handler(CommandHandler("assess",    cmd_assess))
     app.add_handler(CommandHandler("reminders", cmd_reminders))
+    app.add_handler(CommandHandler("timezone",  cmd_timezone))
     app.add_handler(CommandHandler("goals",     cmd_goals))
     app.add_handler(CommandHandler("profile",   cmd_profile))
     app.add_handler(CommandHandler("report",    cmd_report))
+    app.add_handler(CommandHandler("macros",    cmd_macros))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_food_photo))
     app.add_handler(CallbackQueryHandler(handle_cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_chat))
 
