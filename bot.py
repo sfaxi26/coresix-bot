@@ -42,14 +42,637 @@ PILLARS = {
 }
 PIDS = list(PILLARS.keys())
 
-FALLBACK = {
-    "fuel":    ["Drink water before coffee","Add one vegetable to your next meal","Eat one meal without your phone"],
-    "move":    ["5 push-ups before your shower","Walk around the block after lunch","Stretch 60 seconds now"],
-    "rest":    ["Phone charger across the room tonight","4 deep breaths before sleep","Make your bed right after waking"],
-    "calm":    ["3 breaths before opening any app","Write one thing you are grateful for","2 minutes silence with your morning drink"],
-    "connect": ["One genuine message to a friend","Give someone a real compliment","Phone down during your next conversation"],
-    "focus":   ["Write your one priority before email","Read one page before your phone","Notifications off for 30 minutes"],
+# ── HABIT LIBRARY ───────────────────────────────────────
+# Organised by pillar → level → time of day
+# Level: beginner (0-7 days), intermediate (8-21), advanced (22+)
+# Time: morning, afternoon, evening, anytime
+
+HABIT_LIBRARY = {
+    "fuel": {
+        "beginner": {
+            "morning":   [
+                "Drink a full glass of water before your first coffee",
+                "Eat breakfast sitting down — no phone, no screens",
+                "Add one piece of fruit to your morning routine",
+                "Drink water before checking your phone",
+                "Have a glass of water with lemon first thing",
+            ],
+            "afternoon": [
+                "Drink one glass of water before lunch",
+                "Add one vegetable to whatever you eat at lunch",
+                "Eat your lunch away from your desk today",
+                "Swap your afternoon snack for a handful of nuts",
+                "Drink water before your afternoon coffee or tea",
+            ],
+            "evening":   [
+                "Eat dinner without screens for at least 10 minutes",
+                "Drink one glass of water before dinner",
+                "Add one vegetable to your evening meal",
+                "Stop eating 2 hours before bed — just water after",
+                "Prepare tomorrow's healthy snack before bed",
+            ],
+            "anytime":   [
+                "Drink a glass of water every time you stand up",
+                "Replace one processed snack with a whole food today",
+                "Chew each bite slowly — put your fork down between bites",
+                "Eat from a smaller plate at your next meal",
+                "Read one food label today and understand what's in it",
+            ],
+        },
+        "intermediate": {
+            "morning":   [
+                "Eat 20-30g of protein within 30 minutes of waking",
+                "Prepare a healthy breakfast the night before",
+                "Start your day with 500ml of water before anything else",
+                "Add a tablespoon of chia or flaxseeds to your breakfast",
+                "Eat a high-fibre breakfast — oats, berries, or whole grain",
+            ],
+            "afternoon": [
+                "Eat a high-protein lunch — aim for 30g or more",
+                "Include a leafy green in your lunch today",
+                "Drink 500ml of water between breakfast and lunch",
+                "Replace refined carbs with whole grains at lunch",
+                "Eat a fistful of vegetables with your midday meal",
+            ],
+            "evening":   [
+                "Plan tomorrow's meals before going to bed",
+                "Cook one extra portion at dinner for tomorrow's lunch",
+                "Eat a light dinner — prioritise protein and vegetables",
+                "Avoid alcohol tonight — drink herbal tea instead",
+                "Log what you ate today — just mentally review it",
+            ],
+            "anytime":   [
+                "Hit your water target — 8 glasses before day ends",
+                "Eat 5 different coloured foods today",
+                "Include omega-3 in a meal today — fish, walnuts, or flaxseed",
+                "Avoid ultra-processed food for one full meal today",
+                "Track your protein intake for just this one day",
+            ],
+        },
+        "advanced": {
+            "morning":   [
+                "Eat 35g of protein at breakfast — eggs, Greek yogurt, or protein shake",
+                "Fast until 10am and break it with a high-protein meal",
+                "Prep your full day of meals in 15 minutes this morning",
+                "Eat a anti-inflammatory breakfast — berries, nuts, and oats",
+                "Hydrate with 750ml of water before your first meal",
+            ],
+            "afternoon": [
+                "Time your carbs around your workout window today",
+                "Eat a balanced macro lunch — protein, fat, and complex carbs",
+                "Take your vitamins or supplements with lunch today",
+                "Do a 10-minute meal prep for tomorrow during your lunch break",
+                "Avoid caffeine after 2pm to protect tonight's sleep",
+            ],
+            "evening":   [
+                "Eat a casein-rich dinner for overnight muscle recovery",
+                "Have your last meal 3 hours before sleep",
+                "Include fermented food at dinner — yogurt, kefir, or kimchi",
+                "Drink chamomile or magnesium tea after dinner",
+                "Review your nutrition for the day and note one improvement",
+            ],
+            "anytime":   [
+                "Hit 1.6-2g of protein per kg of bodyweight today",
+                "Eat every 3-4 hours to keep blood sugar stable all day",
+                "Drink 35ml of water per kg of bodyweight today",
+                "Eat a rainbow — 6 different coloured plants today",
+                "Avoid eating while distracted for every meal today",
+            ],
+        },
+    },
+    "move": {
+        "beginner": {
+            "morning":   [
+                "Do 10 jumping jacks the moment your alarm goes off",
+                "Walk to the end of the street and back before breakfast",
+                "Do 5 push-ups before stepping into the shower",
+                "Stretch your arms above your head for 60 seconds after waking",
+                "March in place for 2 minutes while your kettle boils",
+            ],
+            "afternoon": [
+                "Take a 5-minute walk outside after lunch",
+                "Do 10 calf raises while waiting for your food to heat up",
+                "Stand up from your desk and stretch for 2 minutes",
+                "Walk to a colleague instead of sending a message",
+                "Take the stairs instead of the lift once today",
+            ],
+            "evening":   [
+                "Do a 5-minute stretch before sitting on the couch",
+                "Take a 10-minute walk after dinner",
+                "Do 15 squats before your evening shower",
+                "Stretch your neck and shoulders for 2 minutes",
+                "Dance to one song in your kitchen while cooking",
+            ],
+            "anytime":   [
+                "Park further away from your destination today",
+                "Walk while taking a phone call instead of sitting",
+                "Do 10 squats every time you go to the bathroom",
+                "Stand up and move for 2 minutes every hour",
+                "Walk an extra 500 steps today — just one extra block",
+            ],
+        },
+        "intermediate": {
+            "morning":   [
+                "Do a 10-minute bodyweight circuit before breakfast",
+                "Go for a 15-minute brisk walk before work",
+                "Do 20 push-ups and 20 squats as your morning starter",
+                "Complete a 10-minute yoga flow after waking",
+                "Do a 5-minute high-intensity burst — burpees, jumping jacks, sprints",
+            ],
+            "afternoon": [
+                "Do a 15-minute walk at a fast pace during lunch",
+                "Complete 3 sets of 15 bodyweight squats at your desk",
+                "Do a 10-minute resistance band workout in your lunch break",
+                "Walk 2000 steps before your afternoon ends",
+                "Do wall sits for 60 seconds during a break",
+            ],
+            "evening":   [
+                "Go for a 20-minute walk after dinner",
+                "Complete a 15-minute home workout before relaxing",
+                "Do a 10-minute stretch and mobility session",
+                "Cycle, swim, or jog for 20 minutes this evening",
+                "Do 3 sets of push-ups, squats, and lunges before bed",
+            ],
+            "anytime":   [
+                "Hit 7000 steps today — track it on your phone",
+                "Do a 20-minute workout — anything counts",
+                "Complete 100 squats spread throughout the day",
+                "Try one new movement today — handstand hold, plank variation",
+                "Foam roll or stretch tight muscles for 10 minutes",
+            ],
+        },
+        "advanced": {
+            "morning":   [
+                "Complete a 20-minute strength training session before work",
+                "Do a 5km run or 20-minute high-intensity cycle",
+                "Complete your planned workout — no skipping, no shortcuts",
+                "Do 50 push-ups and 50 squats as your morning activation",
+                "Train fasted this morning — workout before breakfast",
+            ],
+            "afternoon": [
+                "Hit your daily step target before 3pm",
+                "Do your mobility and flexibility work during lunch",
+                "Complete a skill practice — handstands, pull-ups, or jumps",
+                "Walk or cycle to your next destination instead of driving",
+                "Do a 20-minute HIIT session in your lunch break",
+            ],
+            "evening":   [
+                "Complete your recovery session — foam rolling and stretching",
+                "Do a 30-minute evening strength or cardio session",
+                "Walk 3000 steps after dinner to aid digestion",
+                "Complete your weekly mileage goal this evening",
+                "Do yoga or mobility work to prepare for tomorrow's training",
+            ],
+            "anytime":   [
+                "Hit 10000 steps and 30 minutes of exercise today",
+                "Complete all planned training sessions without skipping",
+                "Add one extra set to every exercise today",
+                "Train the muscle group you've been neglecting this week",
+                "Record your workout performance to track progress",
+            ],
+        },
+    },
+    "rest": {
+        "beginner": {
+            "morning":   [
+                "Make your bed within 5 minutes of waking up",
+                "Sit in silence for 2 minutes before picking up your phone",
+                "Open the curtains and get natural light within 10 minutes of waking",
+                "Drink a glass of water before looking at any screen",
+                "Take 5 slow deep breaths before getting out of bed",
+            ],
+            "afternoon": [
+                "Take a 10-minute rest away from all screens this afternoon",
+                "Close your eyes and rest for 5 minutes after lunch",
+                "Step outside for 5 minutes of fresh air and sunlight",
+                "Do nothing for 5 minutes — no phone, no tasks",
+                "Take a proper lunch break — sit, eat, breathe",
+            ],
+            "evening":   [
+                "Put your phone charger in another room before bed",
+                "Turn off all screens 15 minutes before your target sleep time",
+                "Dim your lights an hour before bed",
+                "Write down tomorrow's top 3 tasks so your mind can rest",
+                "Do 4 slow deep breaths the moment you get into bed",
+            ],
+            "anytime":   [
+                "Set a consistent bedtime alarm and stick to it tonight",
+                "Avoid caffeine after 2pm today",
+                "Take a 10-minute nap if you feel tired — set an alarm",
+                "Spend 5 minutes outside today in natural daylight",
+                "Turn your phone to silent for the next 30 minutes",
+            ],
+        },
+        "intermediate": {
+            "morning":   [
+                "Wake up at the same time as yesterday — no snoozing",
+                "Get 10 minutes of sunlight within 30 minutes of waking",
+                "Do a 5-minute morning stretch before touching your phone",
+                "Journal one sentence about how you slept and how you feel",
+                "Avoid checking email or social media for the first 20 minutes",
+            ],
+            "afternoon": [
+                "Take a 20-minute power nap if you slept under 7 hours",
+                "Do a 10-minute breathing or meditation session",
+                "Go for a 10-minute walk in natural light this afternoon",
+                "Avoid caffeine completely from now until tomorrow",
+                "Close unnecessary browser tabs and tidy your workspace",
+            ],
+            "evening":   [
+                "Start your wind-down routine 45 minutes before sleep",
+                "Take a warm shower or bath before bed to lower body temperature",
+                "Read a physical book for 15 minutes before sleep",
+                "Write 3 things that went well today in a journal",
+                "Set your phone to Do Not Disturb mode for the night",
+            ],
+            "anytime":   [
+                "Track your sleep tonight with your phone or watch",
+                "Keep your bedroom below 18 degrees — open a window",
+                "Avoid alcohol today — it destroys sleep quality",
+                "Get 7-9 hours of sleep tonight — go to bed on time",
+                "Expose yourself to bright light in the morning and darkness at night",
+            ],
+        },
+        "advanced": {
+            "morning":   [
+                "Rise at the same time every day — weekends included",
+                "Complete a 10-minute morning sunlight and breathing protocol",
+                "Review last night's sleep data and note one pattern",
+                "Do a cold shower for 30 seconds to boost alertness",
+                "Complete your morning routine without your phone for the first hour",
+            ],
+            "afternoon": [
+                "Do a 20-minute NSDR or yoga nidra session for deep rest",
+                "Block out one hour this afternoon with no meetings or calls",
+                "Finish all caffeine by 12pm today",
+                "Step outside for a 15-minute walk in natural light",
+                "Spend 10 minutes in complete silence — no inputs",
+            ],
+            "evening":   [
+                "Wear blue-light glasses from 8pm onwards tonight",
+                "Take magnesium glycinate before bed to improve sleep depth",
+                "Follow a strict pre-sleep routine — same steps every night",
+                "Keep your bedroom dark, cool, and completely quiet",
+                "Avoid screens for 30 minutes before your sleep target time",
+            ],
+            "anytime":   [
+                "Optimise your sleep environment — dark, cool, and quiet",
+                "Aim for 8 hours in bed tonight — not just sleep time",
+                "Practice sleep restriction if you've been lying awake — get up",
+                "Review your weekly sleep average and set a target",
+                "Nap strategically — 20 minutes before 3pm only",
+            ],
+        },
+    },
+    "calm": {
+        "beginner": {
+            "morning":   [
+                "Take 3 slow deep breaths before opening any social app",
+                "Write one thing you are grateful for before checking your phone",
+                "Sit in silence for 2 minutes with your morning drink",
+                "Smile at yourself in the mirror for 30 seconds",
+                "Say one positive thing about your day before it starts",
+            ],
+            "afternoon": [
+                "Step outside and notice 5 things you can see around you",
+                "Take 5 slow breaths before your next meeting or task",
+                "Put your phone face-down for 15 minutes right now",
+                "Write down one worry and set it aside for later",
+                "Drink a cup of tea or water slowly and mindfully",
+            ],
+            "evening":   [
+                "Write down one thing that made you smile today",
+                "Do 5 minutes of slow breathing before bed",
+                "Put your phone in another room for the last hour",
+                "List 3 things that went well today — however small",
+                "Tense every muscle in your body for 5 seconds then release",
+            ],
+            "anytime":   [
+                "Take one slow exhale before responding to any stressful message",
+                "Name your emotion out loud — just identifying it reduces it",
+                "Spend 5 minutes doing absolutely nothing",
+                "Listen to one calming song with your eyes closed",
+                "Go for a slow 5-minute walk with no destination",
+            ],
+        },
+        "intermediate": {
+            "morning":   [
+                "Do a 5-minute guided meditation before checking your phone",
+                "Journal for 3 minutes — stream of consciousness, no editing",
+                "Do a body scan — notice where you hold tension and release it",
+                "Set one intention for your emotional state today",
+                "Do box breathing — 4 counts in, hold, out, hold — 5 rounds",
+            ],
+            "afternoon": [
+                "Take a 10-minute break from all digital inputs this afternoon",
+                "Do a 5-minute progressive muscle relaxation at your desk",
+                "Step outside and walk slowly for 10 minutes with no agenda",
+                "Write down your three biggest stressors and one action for each",
+                "Do a 4-7-8 breathing cycle — 4 in, 7 hold, 8 out — 4 rounds",
+            ],
+            "evening":   [
+                "Do a 10-minute meditation or mindfulness session before bed",
+                "Journal about your day — what stressed you and what helped",
+                "Do a gratitude practice — 5 specific things you're grateful for",
+                "Have a tech-free hour before bed — no screens at all",
+                "Take a warm bath with Epsom salts to release physical tension",
+            ],
+            "anytime":   [
+                "Practice single-tasking — do one thing at a time all day",
+                "Say no to one non-essential commitment today",
+                "Spend 10 minutes in nature — park, garden, or open sky",
+                "Call a friend instead of texting — voice reduces stress more",
+                "Do a 10-minute mindfulness exercise — focus only on your senses",
+            ],
+        },
+        "advanced": {
+            "morning":   [
+                "Complete a 15-minute meditation before starting your day",
+                "Do a cold exposure — cold shower or face dip — for stress resilience",
+                "Write your morning pages — 3 pages of uncensored thoughts",
+                "Practice loving-kindness meditation for 10 minutes",
+                "Set your nervous system baseline — breathwork before any stimulation",
+            ],
+            "afternoon": [
+                "Take a complete screen break for 30 minutes this afternoon",
+                "Practice deliberate non-doing — 15 minutes of pure stillness",
+                "Do a stress-response audit — what triggered you today and why",
+                "Walk in nature for 20 minutes with no phone or headphones",
+                "Do a full body yoga flow for 15 minutes during your break",
+            ],
+            "evening":   [
+                "Complete a 20-minute evening meditation before sleep",
+                "Write a detailed gratitude journal — 5 entries with full context",
+                "Do a weekly emotional review — what patterns did you notice",
+                "Practice non-sleep deep rest — 20-minute NSDR protocol",
+                "End the day with a 10-minute breathing session in the dark",
+            ],
+            "anytime":   [
+                "Maintain a stress journal for one full day — note every trigger",
+                "Practice the 5-5-5 rule for every anxious thought today",
+                "Spend 20 minutes in complete solitude with no input",
+                "Meditate for 20 minutes — no guided audio, just breath",
+                "Review your weekly emotional patterns and identify one root cause",
+            ],
+        },
+    },
+    "connect": {
+        "beginner": {
+            "morning":   [
+                "Send one genuine good morning message to someone you care about",
+                "Text one person just to say you were thinking of them",
+                "Reply to one message you have been putting off",
+                "Wish a colleague a genuine good morning today",
+                "Write a 2-line message to someone you have not spoken to in a while",
+            ],
+            "afternoon": [
+                "Give one specific genuine compliment to someone today",
+                "Put your phone face-down during your next conversation",
+                "Ask someone how they really are — and actually listen",
+                "Make eye contact and smile at the next person you pass",
+                "Thank someone who helped you recently — be specific",
+            ],
+            "evening":   [
+                "Have a device-free conversation with someone at home",
+                "Call instead of texting one person today",
+                "Tell someone one thing you appreciate about them",
+                "Share something funny or uplifting with a friend",
+                "Check in on someone who might be going through a hard time",
+            ],
+            "anytime":   [
+                "Reach out to one person you have lost touch with",
+                "Say yes to a social invitation you might normally decline",
+                "Listen fully in your next conversation — no phone, no distraction",
+                "Remember one person's name today and use it",
+                "Do one kind thing for a stranger today",
+            ],
+        },
+        "intermediate": {
+            "morning":   [
+                "Send a voice note instead of a text to someone close",
+                "Write a heartfelt message to someone who has helped you",
+                "Plan one social activity for this week and send the invite",
+                "Call a family member you have not spoken to recently",
+                "Send an encouraging message to someone working toward a goal",
+            ],
+            "afternoon": [
+                "Have lunch with a colleague instead of eating alone",
+                "Ask a meaningful question in your next conversation",
+                "Introduce yourself to one person you see regularly but do not know",
+                "Offer help to someone before they ask for it",
+                "Share something vulnerable — a real feeling or experience",
+            ],
+            "evening":   [
+                "Have a 20-minute uninterrupted conversation with someone you love",
+                "Write a letter — physical or digital — to someone important",
+                "Plan a date or catch-up with a friend you have been meaning to see",
+                "Express gratitude to three specific people today",
+                "Ask someone to share something good that happened to them today",
+            ],
+            "anytime":   [
+                "Join a group or community around something you enjoy",
+                "Volunteer 30 minutes of your time to help someone today",
+                "Deepen one existing relationship — go beyond small talk",
+                "Be fully present in every interaction today — no half-attention",
+                "Forgive someone — mentally release a grudge you have been holding",
+            ],
+        },
+        "advanced": {
+            "morning":   [
+                "Write a detailed appreciation letter to someone who shaped you",
+                "Reach out to a mentor or someone you admire with a specific question",
+                "Plan a meaningful shared experience with someone important",
+                "Start a weekly check-in ritual with a close friend",
+                "Identify one relationship you want to invest more in this month",
+            ],
+            "afternoon": [
+                "Have a deep conversation about values or dreams with someone",
+                "Mentor or teach someone a skill you have mastered",
+                "Resolve a conflict or misunderstanding you have been avoiding",
+                "Create a shared goal with someone — fitness, learning, or growth",
+                "Practice active listening for one full hour — ask and listen only",
+            ],
+            "evening":   [
+                "Reflect on your key relationships — who needs more of your time",
+                "Create a connection ritual — weekly dinner, walk, or call",
+                "Write down what you want your closest relationships to feel like",
+                "Express love or appreciation in a non-verbal way today",
+                "Invest in one friendship you have been neglecting",
+            ],
+            "anytime":   [
+                "Map your social network — who energises you and who drains you",
+                "Build a new meaningful connection with someone outside your circle",
+                "Commit to one hour per week of undivided attention for a key person",
+                "Create community — host something, organise something, bring people together",
+                "Practice radical generosity — give time, attention, or resources",
+            ],
+        },
+    },
+    "focus": {
+        "beginner": {
+            "morning":   [
+                "Write your single most important task before opening email",
+                "Read one page of a book before reaching for your phone",
+                "Spend 2 minutes thinking about what success looks like today",
+                "Write your top 3 priorities for the day before anything else",
+                "Say your main goal out loud before sitting at your desk",
+            ],
+            "afternoon": [
+                "Close all browser tabs except the one you are working on",
+                "Set a 25-minute focus timer and work on one task only",
+                "Turn off all notifications for the next 30 minutes",
+                "Review your task list and cross off one thing you have been avoiding",
+                "Write down what done looks like for your main task today",
+            ],
+            "evening":   [
+                "Write tomorrow's top priority before closing your laptop",
+                "Review what you accomplished today — even the small wins",
+                "Clear your desk or workspace for tomorrow",
+                "Spend 5 minutes planning the next day so your morning is clear",
+                "Write one thing you are proud of from today",
+            ],
+            "anytime":   [
+                "Do the hardest task first — before anything else",
+                "Say no to one thing that does not align with your priorities",
+                "Spend 5 minutes on a goal that matters to you — just 5 minutes",
+                "Write your long-term goal somewhere visible today",
+                "Remove one distraction from your environment right now",
+            ],
+        },
+        "intermediate": {
+            "morning":   [
+                "Complete your most important task in the first 90 minutes of work",
+                "Do a 10-minute review of your goals before starting work",
+                "Write your MIT — most important task — and do it before meetings",
+                "Plan your day in time blocks before it begins",
+                "Spend 10 minutes reading something that develops your skills",
+            ],
+            "afternoon": [
+                "Complete a full Pomodoro — 25 minutes deep work, 5 rest, repeat",
+                "Batch your emails into one 20-minute block instead of checking constantly",
+                "Do a mid-day review — are you working on the right things",
+                "Eliminate one low-value task from your list today",
+                "Work in a distraction-free environment for one full hour",
+            ],
+            "evening":   [
+                "Do a weekly review — what moved you forward and what did not",
+                "Read for 20 minutes in your area of growth or interest",
+                "Write in a journal about your progress toward your main goal",
+                "Reflect on one decision you made today and what you would do differently",
+                "Plan tomorrow in detail so you can start without friction",
+            ],
+            "anytime":   [
+                "Complete your three MITs before doing anything reactive",
+                "Spend 30 minutes on your most important long-term goal today",
+                "Audit your time — where is it going and is it aligned with your goals",
+                "Learn one new thing today and teach it to someone else",
+                "Remove your phone from your workspace for the next 2 hours",
+            ],
+        },
+        "advanced": {
+            "morning":   [
+                "Complete a 90-minute deep work block before any meetings",
+                "Review your quarterly goals and align today's work with them",
+                "Do a morning startup ritual — review, plan, and commit",
+                "Write your one wildly important goal and identify today's step",
+                "Read for 30 minutes in your area of expertise before work",
+            ],
+            "afternoon": [
+                "Do two full Pomodoro cycles on your most important project",
+                "Conduct a time audit — track every 30-minute block today",
+                "Complete a project or task that has been sitting unfinished",
+                "Identify the one thing that if done will make everything else easier",
+                "Block 2 hours of maker time — no calls, no email, deep work only",
+            ],
+            "evening":   [
+                "Do a shutdown ritual — clear inbox, write tomorrow's plan, close systems",
+                "Reflect on your performance today — score yourself 1-10 and explain",
+                "Read or learn for 30 minutes in service of your long-term goal",
+                "Write your vision statement and read it before sleep",
+                "Review your week and identify the one change that would have the biggest impact",
+            ],
+            "anytime":   [
+                "Protect your peak energy hours for your most important work",
+                "Eliminate your biggest time waster — identify and cut it today",
+                "Create a system for one recurring task to save future time",
+                "Work toward your one-year goal for at least one hour today",
+                "Review your life priorities and ensure your daily actions match",
+            ],
+        },
+    },
 }
+
+def get_habit(pillar_id, streak=0, hour=None, mood=None, profile=None, used_today=None):
+    """Get a contextual habit from the library. Never repeats within a session."""
+    if hour is None:
+        hour = datetime.now().hour
+    if used_today is None:
+        used_today = []
+
+    # Determine level
+    if streak < 8:
+        level = "beginner"
+    elif streak < 22:
+        level = "intermediate"
+    else:
+        level = "advanced"
+
+    # Determine time of day
+    if hour < 11:
+        tod = "morning"
+    elif hour < 16:
+        tod = "afternoon"
+    else:
+        tod = "evening"
+
+    # Adjust for mood
+    if mood in ("low", "very_low"):
+        level = "beginner"  # easier habits when struggling
+
+    # Adjust for health conditions
+    if profile:
+        conditions = profile.get("conditions", [])
+        if any(c in ["arthritis","injury","chronic pain"] for c in conditions):
+            if pillar_id == "move":
+                tod = "morning"  # gentler morning movement
+
+    pillar_habits = HABIT_LIBRARY.get(pillar_id, {})
+    level_habits = pillar_habits.get(level, pillar_habits.get("beginner", {}))
+
+    # Try time-specific first, then anytime, then any other time
+    candidates = []
+    for t in [tod, "anytime", "morning", "afternoon", "evening"]:
+        pool = level_habits.get(t, [])
+        available = [h for h in pool if h not in used_today]
+        candidates.extend(available)
+        if len(candidates) >= 3:
+            break
+
+    if not candidates:
+        # Ultimate fallback
+        all_habits = []
+        for t_habits in level_habits.values():
+            all_habits.extend(t_habits)
+        candidates = [h for h in all_habits if h not in used_today] or all_habits
+
+    return random.choice(candidates) if candidates else "Do one small action for " + pillar_id
+
+def get_three_habits(pillar_ids, streak=0, mood=None, profile=None):
+    """Get 3 unique habits for the day — Easy, Normal, Challenge variants."""
+    used = []
+    result = {}
+    for pid in pillar_ids:
+        h = get_habit(pid, streak=streak, mood=mood, profile=profile, used_today=used)
+        result[pid] = h
+        used.append(h)
+    return result
+
+# Keep FALLBACK for backward compatibility
+FALLBACK = {
+    pid: [get_habit(pid) for _ in range(3)]
+    for pid in ["fuel","move","rest","calm","connect","focus"]
+}
+
 
 SLOTS = {
     "morning":   {"label":"Morning",   "default":"07:00"},
