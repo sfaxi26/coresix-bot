@@ -842,12 +842,23 @@ async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"Weekly Report\n\n{days}/7 days - {total} habits\n\nPillar breakdown:\n{breakdown}\n\nCoach:\n{report}")
 
 # ── CALLBACKS ─────────────────────────────────────────────
+async def safe_edit(query, text, **kwargs):
+    """Edit message safely — ignore if content unchanged."""
+    try:
+        await query.edit_message_text(text, **kwargs)
+    except Exception as e:
+        if "is not modified" in str(e):
+            pass  # User tapped same button twice — ignore
+        else:
+            raise
+
 async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
     user = get_user(uid)
     data = q.data
+    from telegram.error import BadRequest as TgBadRequest
 
     # ── Habit detail view ──
     if data.startswith("habit_"):
