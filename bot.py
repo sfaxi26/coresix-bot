@@ -1,9 +1,9 @@
-import os, random, asyncio, json, pytz
+import os, random, json, pytz
 from datetime import datetime, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-BOT_TOKEN    = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN     = os.environ.get("BOT_TOKEN", "")
 GROQ_API_KEY  = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
@@ -26,10 +26,296 @@ def load_users():
             print(f"Loaded {len(users)} users from disk")
     except FileNotFoundError:
         print("No data file — starting fresh")
-        users = {}
-    except Exception as e:
-        print(f"Load error: {e}")
-        users = {}
+        # ── SMART QUESTIONNAIRE ─────────────────────────────────
+# Replaces both assessment and health profile
+# Each answer maps to a pillar score + rich profile data
+
+QUESTIONNAIRE = [
+    {
+        "id": "fuel",
+        "pillar": "fuel",
+        "question": "How would you describe your eating habits?",
+        "emoji": "⚡",
+        "answers": [
+            {"text": "I eat whatever, whenever — not much thought goes into it", "score": 1, "profile": "poor nutrition habits, likely high processed food intake"},
+            {"text": "Pretty decent but inconsistent — good days and bad days", "score": 2, "profile": "moderate nutrition, inconsistent habits"},
+            {"text": "I eat well most of the time — mostly whole foods", "score": 3, "profile": "good nutrition habits, some room for improvement"},
+            {"text": "Very intentional — I track, plan and prioritise nutrition", "score": 4, "profile": "strong nutrition habits, high nutritional awareness"},
+        ]
+    },
+    {
+        "id": "move",
+        "pillar": "move",
+        "question": "How active are you on a typical week?",
+        "emoji": "💪",
+        "answers": [
+            {"text": "Mostly sedentary — I sit most of the day", "score": 1, "profile": "sedentary lifestyle, needs movement foundation"},
+            {"text": "Light activity — occasional walks or casual exercise", "score": 2, "profile": "lightly active, building exercise habit"},
+            {"text": "Moderately active — I exercise 2-3 times a week", "score": 3, "profile": "moderately active, consistent but room to grow"},
+            {"text": "Very active — I train regularly and hit my step goals", "score": 4, "profile": "highly active, performance-focused"},
+        ]
+    },
+    {
+        "id": "rest",
+        "pillar": "rest",
+        "question": "How well do you sleep and recover?",
+        "emoji": "😴",
+        "answers": [
+            {"text": "Poorly — I rarely get enough sleep and feel tired daily", "score": 1, "profile": "poor sleep quality, chronic fatigue likely"},
+            {"text": "Inconsistent — some good nights, many bad ones", "score": 2, "profile": "inconsistent sleep, no solid sleep routine"},
+            {"text": "Fairly well — I usually get 6-7 hours most nights", "score": 3, "profile": "decent sleep, small improvements needed"},
+            {"text": "Really well — 7-8 hours, consistent schedule, wake refreshed", "score": 4, "profile": "good sleep hygiene, optimised recovery"},
+        ]
+    },
+    {
+        "id": "calm",
+        "pillar": "calm",
+        "question": "How do you handle stress and your mental state?",
+        "emoji": "🧘",
+        "answers": [
+            {"text": "I feel overwhelmed often — stress controls me", "score": 1, "profile": "high chronic stress, needs foundational calm practices"},
+            {"text": "I manage but it takes effort — some anxiety day to day", "score": 2, "profile": "moderate stress, developing coping strategies"},
+            {"text": "Pretty balanced — I have tools to manage stress most of the time", "score": 3, "profile": "good stress management, some refinement needed"},
+            {"text": "Very calm and grounded — I have strong mindfulness practices", "score": 4, "profile": "strong mental resilience, mindfulness practitioner"},
+        ]
+    },
+    {
+        "id": "connect",
+        "pillar": "connect",
+        "question": "How would you describe your relationships and social life?",
+        "emoji": "🤝",
+        "answers": [
+            {"text": "Isolated — I feel disconnected from people around me", "score": 1, "profile": "socially isolated, needs connection foundation"},
+            {"text": "Okay but surface level — I want deeper connections", "score": 2, "profile": "superficial connections, craving depth"},
+            {"text": "Good relationships — I have people I can rely on", "score": 3, "profile": "solid social foundation, can deepen further"},
+            {"text": "Thriving — rich meaningful relationships and strong community", "score": 4, "profile": "strong social network, community builder"},
+        ]
+    },
+    {
+        "id": "focus",
+        "pillar": "focus",
+        "question": "How focused and purposeful do you feel in daily life?",
+        "emoji": "🎯",
+        "answers": [
+            {"text": "Scattered — I feel lost, distracted and without clear direction", "score": 1, "profile": "low focus and purpose, needs clarity and structure"},
+            {"text": "Somewhat focused — I have goals but struggle to stay on track", "score": 2, "profile": "moderate focus, procrastination and distraction challenges"},
+            {"text": "Pretty focused — I know my priorities and work toward them", "score": 3, "profile": "good focus habits, can optimise further"},
+            {"text": "Laser focused — clear purpose, deep work, consistent execution", "score": 4, "profile": "high performer, strong focus and purpose clarity"},
+        ]
+    },
+    {
+        "id": "age",
+        "pillar": None,
+        "question": "How old are you?",
+        "emoji": "🎂",
+        "answers": [
+            {"text": "Under 25", "score": None, "profile": "under 25, building foundations"},
+            {"text": "25-35", "score": None, "profile": "25-35, peak building years"},
+            {"text": "36-50", "score": None, "profile": "36-50, optimisation phase"},
+            {"text": "Over 50", "score": None, "profile": "over 50, longevity focus"},
+        ]
+    },
+    {
+        "id": "sex",
+        "pillar": None,
+        "question": "What is your biological sex?",
+        "emoji": "👤",
+        "answers": [
+            {"text": "Male", "score": None, "profile": "male"},
+            {"text": "Female", "score": None, "profile": "female"},
+            {"text": "Prefer not to say", "score": None, "profile": "unspecified"},
+        ]
+    },
+    {
+        "id": "conditions",
+        "pillar": None,
+        "question": "Any health conditions I should know about?",
+        "emoji": "🏥",
+        "answers": [
+            {"text": "None — I am in good health", "score": None, "profile": "no conditions"},
+            {"text": "Diabetes or blood sugar issues", "score": None, "profile": "diabetes/blood sugar"},
+            {"text": "Heart condition or hypertension", "score": None, "profile": "cardiovascular condition"},
+            {"text": "Anxiety, depression or mental health", "score": None, "profile": "mental health condition"},
+            {"text": "Joint pain, arthritis or mobility issues", "score": None, "profile": "mobility/joint issues"},
+            {"text": "Other — I will mention it in chat", "score": None, "profile": "other condition"},
+        ]
+    },
+    {
+        "id": "goal",
+        "pillar": None,
+        "question": "What is your biggest goal right now?",
+        "emoji": "🏆",
+        "answers": [
+            {"text": "Lose weight and improve my body", "score": None, "profile": "weight loss and body composition"},
+            {"text": "Reduce stress and feel more calm", "score": None, "profile": "stress reduction and mental wellness"},
+            {"text": "Build better daily routines and discipline", "score": None, "profile": "habit building and routine"},
+            {"text": "Improve energy and feel better every day", "score": None, "profile": "energy and vitality"},
+            {"text": "Perform better at work or sport", "score": None, "profile": "performance optimisation"},
+            {"text": "Live a longer healthier life", "score": None, "profile": "longevity and preventive health"},
+        ]
+    },
+]
+
+def get_q_keyboard(q_data):
+    """Build keyboard for a questionnaire question."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(a["text"][:60], callback_data=f"q_{q_data['id']}_{i}")]
+        for i, a in enumerate(q_data["answers"])
+    ])
+
+def next_question_idx(current_id):
+    """Get index of next question."""
+    ids = [q["id"] for q in QUESTIONNAIRE]
+    if current_id in ids:
+        idx = ids.index(current_id)
+        if idx + 1 < len(QUESTIONNAIRE):
+            return idx + 1
+    return None
+
+
+QUESTIONNAIRE = [
+    {
+        "id": "fuel",
+        "pillar": "fuel",
+        "question": "How would you describe your eating habits?",
+        "emoji": "⚡",
+        "answers": [
+            {"text": "I eat whatever, whenever — not much thought goes into it", "score": 1, "profile": "poor nutrition habits, likely high processed food intake"},
+            {"text": "Pretty decent but inconsistent — good days and bad days", "score": 2, "profile": "moderate nutrition, inconsistent habits"},
+            {"text": "I eat well most of the time — mostly whole foods", "score": 3, "profile": "good nutrition habits, some room for improvement"},
+            {"text": "Very intentional — I track, plan and prioritise nutrition", "score": 4, "profile": "strong nutrition habits, high nutritional awareness"},
+        ]
+    },
+    {
+        "id": "move",
+        "pillar": "move",
+        "question": "How active are you on a typical week?",
+        "emoji": "💪",
+        "answers": [
+            {"text": "Mostly sedentary — I sit most of the day", "score": 1, "profile": "sedentary lifestyle, needs movement foundation"},
+            {"text": "Light activity — occasional walks or casual exercise", "score": 2, "profile": "lightly active, building exercise habit"},
+            {"text": "Moderately active — I exercise 2-3 times a week", "score": 3, "profile": "moderately active, consistent but room to grow"},
+            {"text": "Very active — I train regularly and hit my step goals", "score": 4, "profile": "highly active, performance-focused"},
+        ]
+    },
+    {
+        "id": "rest",
+        "pillar": "rest",
+        "question": "How well do you sleep and recover?",
+        "emoji": "😴",
+        "answers": [
+            {"text": "Poorly — I rarely get enough sleep and feel tired daily", "score": 1, "profile": "poor sleep quality, chronic fatigue likely"},
+            {"text": "Inconsistent — some good nights, many bad ones", "score": 2, "profile": "inconsistent sleep, no solid sleep routine"},
+            {"text": "Fairly well — I usually get 6-7 hours most nights", "score": 3, "profile": "decent sleep, small improvements needed"},
+            {"text": "Really well — 7-8 hours, consistent schedule, wake refreshed", "score": 4, "profile": "good sleep hygiene, optimised recovery"},
+        ]
+    },
+    {
+        "id": "calm",
+        "pillar": "calm",
+        "question": "How do you handle stress and your mental state?",
+        "emoji": "🧘",
+        "answers": [
+            {"text": "I feel overwhelmed often — stress controls me", "score": 1, "profile": "high chronic stress, needs foundational calm practices"},
+            {"text": "I manage but it takes effort — some anxiety day to day", "score": 2, "profile": "moderate stress, developing coping strategies"},
+            {"text": "Pretty balanced — I have tools to manage stress most of the time", "score": 3, "profile": "good stress management, some refinement needed"},
+            {"text": "Very calm and grounded — I have strong mindfulness practices", "score": 4, "profile": "strong mental resilience, mindfulness practitioner"},
+        ]
+    },
+    {
+        "id": "connect",
+        "pillar": "connect",
+        "question": "How would you describe your relationships and social life?",
+        "emoji": "🤝",
+        "answers": [
+            {"text": "Isolated — I feel disconnected from people around me", "score": 1, "profile": "socially isolated, needs connection foundation"},
+            {"text": "Okay but surface level — I want deeper connections", "score": 2, "profile": "superficial connections, craving depth"},
+            {"text": "Good relationships — I have people I can rely on", "score": 3, "profile": "solid social foundation, can deepen further"},
+            {"text": "Thriving — rich meaningful relationships and strong community", "score": 4, "profile": "strong social network, community builder"},
+        ]
+    },
+    {
+        "id": "focus",
+        "pillar": "focus",
+        "question": "How focused and purposeful do you feel in daily life?",
+        "emoji": "🎯",
+        "answers": [
+            {"text": "Scattered — I feel lost, distracted and without clear direction", "score": 1, "profile": "low focus and purpose, needs clarity and structure"},
+            {"text": "Somewhat focused — I have goals but struggle to stay on track", "score": 2, "profile": "moderate focus, procrastination and distraction challenges"},
+            {"text": "Pretty focused — I know my priorities and work toward them", "score": 3, "profile": "good focus habits, can optimise further"},
+            {"text": "Laser focused — clear purpose, deep work, consistent execution", "score": 4, "profile": "high performer, strong focus and purpose clarity"},
+        ]
+    },
+    {
+        "id": "age",
+        "pillar": None,
+        "question": "How old are you?",
+        "emoji": "🎂",
+        "answers": [
+            {"text": "Under 25", "score": None, "profile": "under 25, building foundations"},
+            {"text": "25-35", "score": None, "profile": "25-35, peak building years"},
+            {"text": "36-50", "score": None, "profile": "36-50, optimisation phase"},
+            {"text": "Over 50", "score": None, "profile": "over 50, longevity focus"},
+        ]
+    },
+    {
+        "id": "sex",
+        "pillar": None,
+        "question": "What is your biological sex?",
+        "emoji": "👤",
+        "answers": [
+            {"text": "Male", "score": None, "profile": "male"},
+            {"text": "Female", "score": None, "profile": "female"},
+            {"text": "Prefer not to say", "score": None, "profile": "unspecified"},
+        ]
+    },
+    {
+        "id": "conditions",
+        "pillar": None,
+        "question": "Any health conditions I should know about?",
+        "emoji": "🏥",
+        "answers": [
+            {"text": "None — I am in good health", "score": None, "profile": "no conditions"},
+            {"text": "Diabetes or blood sugar issues", "score": None, "profile": "diabetes/blood sugar"},
+            {"text": "Heart condition or hypertension", "score": None, "profile": "cardiovascular condition"},
+            {"text": "Anxiety, depression or mental health", "score": None, "profile": "mental health condition"},
+            {"text": "Joint pain, arthritis or mobility issues", "score": None, "profile": "mobility/joint issues"},
+            {"text": "Other — I will mention it in chat", "score": None, "profile": "other condition"},
+        ]
+    },
+    {
+        "id": "goal",
+        "pillar": None,
+        "question": "What is your biggest goal right now?",
+        "emoji": "🏆",
+        "answers": [
+            {"text": "Lose weight and improve my body", "score": None, "profile": "weight loss and body composition"},
+            {"text": "Reduce stress and feel more calm", "score": None, "profile": "stress reduction and mental wellness"},
+            {"text": "Build better daily routines and discipline", "score": None, "profile": "habit building and routine"},
+            {"text": "Improve energy and feel better every day", "score": None, "profile": "energy and vitality"},
+            {"text": "Perform better at work or sport", "score": None, "profile": "performance optimisation"},
+            {"text": "Live a longer healthier life", "score": None, "profile": "longevity and preventive health"},
+        ]
+    },
+]
+
+def get_q_keyboard(q_data):
+    """Build keyboard for a questionnaire question."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(a["text"][:60], callback_data=f"q_{q_data['id']}_{i}")]
+        for i, a in enumerate(q_data["answers"])
+    ])
+
+def next_question_idx(current_id):
+    """Get index of next question."""
+    ids = [q["id"] for q in QUESTIONNAIRE]
+    if current_id in ids:
+        idx = ids.index(current_id)
+        if idx + 1 < len(QUESTIONNAIRE):
+            return idx + 1
+    return None
+
+users = {}
 
 # ── PILLARS ──────────────────────────────────────────────
 PILLARS = {
@@ -42,637 +328,52 @@ PILLARS = {
 }
 PIDS = list(PILLARS.keys())
 
-# ── HABIT LIBRARY ───────────────────────────────────────
-# Organised by pillar → level → time of day
-# Level: beginner (0-7 days), intermediate (8-21), advanced (22+)
-# Time: morning, afternoon, evening, anytime
-
-HABIT_LIBRARY = {
-    "fuel": {
-        "beginner": {
-            "morning":   [
-                "Drink a full glass of water before your first coffee",
-                "Eat breakfast sitting down — no phone, no screens",
-                "Add one piece of fruit to your morning routine",
-                "Drink water before checking your phone",
-                "Have a glass of water with lemon first thing",
-            ],
-            "afternoon": [
-                "Drink one glass of water before lunch",
-                "Add one vegetable to whatever you eat at lunch",
-                "Eat your lunch away from your desk today",
-                "Swap your afternoon snack for a handful of nuts",
-                "Drink water before your afternoon coffee or tea",
-            ],
-            "evening":   [
-                "Eat dinner without screens for at least 10 minutes",
-                "Drink one glass of water before dinner",
-                "Add one vegetable to your evening meal",
-                "Stop eating 2 hours before bed — just water after",
-                "Prepare tomorrow's healthy snack before bed",
-            ],
-            "anytime":   [
-                "Drink a glass of water every time you stand up",
-                "Replace one processed snack with a whole food today",
-                "Chew each bite slowly — put your fork down between bites",
-                "Eat from a smaller plate at your next meal",
-                "Read one food label today and understand what's in it",
-            ],
-        },
-        "intermediate": {
-            "morning":   [
-                "Eat 20-30g of protein within 30 minutes of waking",
-                "Prepare a healthy breakfast the night before",
-                "Start your day with 500ml of water before anything else",
-                "Add a tablespoon of chia or flaxseeds to your breakfast",
-                "Eat a high-fibre breakfast — oats, berries, or whole grain",
-            ],
-            "afternoon": [
-                "Eat a high-protein lunch — aim for 30g or more",
-                "Include a leafy green in your lunch today",
-                "Drink 500ml of water between breakfast and lunch",
-                "Replace refined carbs with whole grains at lunch",
-                "Eat a fistful of vegetables with your midday meal",
-            ],
-            "evening":   [
-                "Plan tomorrow's meals before going to bed",
-                "Cook one extra portion at dinner for tomorrow's lunch",
-                "Eat a light dinner — prioritise protein and vegetables",
-                "Avoid alcohol tonight — drink herbal tea instead",
-                "Log what you ate today — just mentally review it",
-            ],
-            "anytime":   [
-                "Hit your water target — 8 glasses before day ends",
-                "Eat 5 different coloured foods today",
-                "Include omega-3 in a meal today — fish, walnuts, or flaxseed",
-                "Avoid ultra-processed food for one full meal today",
-                "Track your protein intake for just this one day",
-            ],
-        },
-        "advanced": {
-            "morning":   [
-                "Eat 35g of protein at breakfast — eggs, Greek yogurt, or protein shake",
-                "Fast until 10am and break it with a high-protein meal",
-                "Prep your full day of meals in 15 minutes this morning",
-                "Eat a anti-inflammatory breakfast — berries, nuts, and oats",
-                "Hydrate with 750ml of water before your first meal",
-            ],
-            "afternoon": [
-                "Time your carbs around your workout window today",
-                "Eat a balanced macro lunch — protein, fat, and complex carbs",
-                "Take your vitamins or supplements with lunch today",
-                "Do a 10-minute meal prep for tomorrow during your lunch break",
-                "Avoid caffeine after 2pm to protect tonight's sleep",
-            ],
-            "evening":   [
-                "Eat a casein-rich dinner for overnight muscle recovery",
-                "Have your last meal 3 hours before sleep",
-                "Include fermented food at dinner — yogurt, kefir, or kimchi",
-                "Drink chamomile or magnesium tea after dinner",
-                "Review your nutrition for the day and note one improvement",
-            ],
-            "anytime":   [
-                "Hit 1.6-2g of protein per kg of bodyweight today",
-                "Eat every 3-4 hours to keep blood sugar stable all day",
-                "Drink 35ml of water per kg of bodyweight today",
-                "Eat a rainbow — 6 different coloured plants today",
-                "Avoid eating while distracted for every meal today",
-            ],
-        },
-    },
-    "move": {
-        "beginner": {
-            "morning":   [
-                "Do 10 jumping jacks the moment your alarm goes off",
-                "Walk to the end of the street and back before breakfast",
-                "Do 5 push-ups before stepping into the shower",
-                "Stretch your arms above your head for 60 seconds after waking",
-                "March in place for 2 minutes while your kettle boils",
-            ],
-            "afternoon": [
-                "Take a 5-minute walk outside after lunch",
-                "Do 10 calf raises while waiting for your food to heat up",
-                "Stand up from your desk and stretch for 2 minutes",
-                "Walk to a colleague instead of sending a message",
-                "Take the stairs instead of the lift once today",
-            ],
-            "evening":   [
-                "Do a 5-minute stretch before sitting on the couch",
-                "Take a 10-minute walk after dinner",
-                "Do 15 squats before your evening shower",
-                "Stretch your neck and shoulders for 2 minutes",
-                "Dance to one song in your kitchen while cooking",
-            ],
-            "anytime":   [
-                "Park further away from your destination today",
-                "Walk while taking a phone call instead of sitting",
-                "Do 10 squats every time you go to the bathroom",
-                "Stand up and move for 2 minutes every hour",
-                "Walk an extra 500 steps today — just one extra block",
-            ],
-        },
-        "intermediate": {
-            "morning":   [
-                "Do a 10-minute bodyweight circuit before breakfast",
-                "Go for a 15-minute brisk walk before work",
-                "Do 20 push-ups and 20 squats as your morning starter",
-                "Complete a 10-minute yoga flow after waking",
-                "Do a 5-minute high-intensity burst — burpees, jumping jacks, sprints",
-            ],
-            "afternoon": [
-                "Do a 15-minute walk at a fast pace during lunch",
-                "Complete 3 sets of 15 bodyweight squats at your desk",
-                "Do a 10-minute resistance band workout in your lunch break",
-                "Walk 2000 steps before your afternoon ends",
-                "Do wall sits for 60 seconds during a break",
-            ],
-            "evening":   [
-                "Go for a 20-minute walk after dinner",
-                "Complete a 15-minute home workout before relaxing",
-                "Do a 10-minute stretch and mobility session",
-                "Cycle, swim, or jog for 20 minutes this evening",
-                "Do 3 sets of push-ups, squats, and lunges before bed",
-            ],
-            "anytime":   [
-                "Hit 7000 steps today — track it on your phone",
-                "Do a 20-minute workout — anything counts",
-                "Complete 100 squats spread throughout the day",
-                "Try one new movement today — handstand hold, plank variation",
-                "Foam roll or stretch tight muscles for 10 minutes",
-            ],
-        },
-        "advanced": {
-            "morning":   [
-                "Complete a 20-minute strength training session before work",
-                "Do a 5km run or 20-minute high-intensity cycle",
-                "Complete your planned workout — no skipping, no shortcuts",
-                "Do 50 push-ups and 50 squats as your morning activation",
-                "Train fasted this morning — workout before breakfast",
-            ],
-            "afternoon": [
-                "Hit your daily step target before 3pm",
-                "Do your mobility and flexibility work during lunch",
-                "Complete a skill practice — handstands, pull-ups, or jumps",
-                "Walk or cycle to your next destination instead of driving",
-                "Do a 20-minute HIIT session in your lunch break",
-            ],
-            "evening":   [
-                "Complete your recovery session — foam rolling and stretching",
-                "Do a 30-minute evening strength or cardio session",
-                "Walk 3000 steps after dinner to aid digestion",
-                "Complete your weekly mileage goal this evening",
-                "Do yoga or mobility work to prepare for tomorrow's training",
-            ],
-            "anytime":   [
-                "Hit 10000 steps and 30 minutes of exercise today",
-                "Complete all planned training sessions without skipping",
-                "Add one extra set to every exercise today",
-                "Train the muscle group you've been neglecting this week",
-                "Record your workout performance to track progress",
-            ],
-        },
-    },
-    "rest": {
-        "beginner": {
-            "morning":   [
-                "Make your bed within 5 minutes of waking up",
-                "Sit in silence for 2 minutes before picking up your phone",
-                "Open the curtains and get natural light within 10 minutes of waking",
-                "Drink a glass of water before looking at any screen",
-                "Take 5 slow deep breaths before getting out of bed",
-            ],
-            "afternoon": [
-                "Take a 10-minute rest away from all screens this afternoon",
-                "Close your eyes and rest for 5 minutes after lunch",
-                "Step outside for 5 minutes of fresh air and sunlight",
-                "Do nothing for 5 minutes — no phone, no tasks",
-                "Take a proper lunch break — sit, eat, breathe",
-            ],
-            "evening":   [
-                "Put your phone charger in another room before bed",
-                "Turn off all screens 15 minutes before your target sleep time",
-                "Dim your lights an hour before bed",
-                "Write down tomorrow's top 3 tasks so your mind can rest",
-                "Do 4 slow deep breaths the moment you get into bed",
-            ],
-            "anytime":   [
-                "Set a consistent bedtime alarm and stick to it tonight",
-                "Avoid caffeine after 2pm today",
-                "Take a 10-minute nap if you feel tired — set an alarm",
-                "Spend 5 minutes outside today in natural daylight",
-                "Turn your phone to silent for the next 30 minutes",
-            ],
-        },
-        "intermediate": {
-            "morning":   [
-                "Wake up at the same time as yesterday — no snoozing",
-                "Get 10 minutes of sunlight within 30 minutes of waking",
-                "Do a 5-minute morning stretch before touching your phone",
-                "Journal one sentence about how you slept and how you feel",
-                "Avoid checking email or social media for the first 20 minutes",
-            ],
-            "afternoon": [
-                "Take a 20-minute power nap if you slept under 7 hours",
-                "Do a 10-minute breathing or meditation session",
-                "Go for a 10-minute walk in natural light this afternoon",
-                "Avoid caffeine completely from now until tomorrow",
-                "Close unnecessary browser tabs and tidy your workspace",
-            ],
-            "evening":   [
-                "Start your wind-down routine 45 minutes before sleep",
-                "Take a warm shower or bath before bed to lower body temperature",
-                "Read a physical book for 15 minutes before sleep",
-                "Write 3 things that went well today in a journal",
-                "Set your phone to Do Not Disturb mode for the night",
-            ],
-            "anytime":   [
-                "Track your sleep tonight with your phone or watch",
-                "Keep your bedroom below 18 degrees — open a window",
-                "Avoid alcohol today — it destroys sleep quality",
-                "Get 7-9 hours of sleep tonight — go to bed on time",
-                "Expose yourself to bright light in the morning and darkness at night",
-            ],
-        },
-        "advanced": {
-            "morning":   [
-                "Rise at the same time every day — weekends included",
-                "Complete a 10-minute morning sunlight and breathing protocol",
-                "Review last night's sleep data and note one pattern",
-                "Do a cold shower for 30 seconds to boost alertness",
-                "Complete your morning routine without your phone for the first hour",
-            ],
-            "afternoon": [
-                "Do a 20-minute NSDR or yoga nidra session for deep rest",
-                "Block out one hour this afternoon with no meetings or calls",
-                "Finish all caffeine by 12pm today",
-                "Step outside for a 15-minute walk in natural light",
-                "Spend 10 minutes in complete silence — no inputs",
-            ],
-            "evening":   [
-                "Wear blue-light glasses from 8pm onwards tonight",
-                "Take magnesium glycinate before bed to improve sleep depth",
-                "Follow a strict pre-sleep routine — same steps every night",
-                "Keep your bedroom dark, cool, and completely quiet",
-                "Avoid screens for 30 minutes before your sleep target time",
-            ],
-            "anytime":   [
-                "Optimise your sleep environment — dark, cool, and quiet",
-                "Aim for 8 hours in bed tonight — not just sleep time",
-                "Practice sleep restriction if you've been lying awake — get up",
-                "Review your weekly sleep average and set a target",
-                "Nap strategically — 20 minutes before 3pm only",
-            ],
-        },
-    },
-    "calm": {
-        "beginner": {
-            "morning":   [
-                "Take 3 slow deep breaths before opening any social app",
-                "Write one thing you are grateful for before checking your phone",
-                "Sit in silence for 2 minutes with your morning drink",
-                "Smile at yourself in the mirror for 30 seconds",
-                "Say one positive thing about your day before it starts",
-            ],
-            "afternoon": [
-                "Step outside and notice 5 things you can see around you",
-                "Take 5 slow breaths before your next meeting or task",
-                "Put your phone face-down for 15 minutes right now",
-                "Write down one worry and set it aside for later",
-                "Drink a cup of tea or water slowly and mindfully",
-            ],
-            "evening":   [
-                "Write down one thing that made you smile today",
-                "Do 5 minutes of slow breathing before bed",
-                "Put your phone in another room for the last hour",
-                "List 3 things that went well today — however small",
-                "Tense every muscle in your body for 5 seconds then release",
-            ],
-            "anytime":   [
-                "Take one slow exhale before responding to any stressful message",
-                "Name your emotion out loud — just identifying it reduces it",
-                "Spend 5 minutes doing absolutely nothing",
-                "Listen to one calming song with your eyes closed",
-                "Go for a slow 5-minute walk with no destination",
-            ],
-        },
-        "intermediate": {
-            "morning":   [
-                "Do a 5-minute guided meditation before checking your phone",
-                "Journal for 3 minutes — stream of consciousness, no editing",
-                "Do a body scan — notice where you hold tension and release it",
-                "Set one intention for your emotional state today",
-                "Do box breathing — 4 counts in, hold, out, hold — 5 rounds",
-            ],
-            "afternoon": [
-                "Take a 10-minute break from all digital inputs this afternoon",
-                "Do a 5-minute progressive muscle relaxation at your desk",
-                "Step outside and walk slowly for 10 minutes with no agenda",
-                "Write down your three biggest stressors and one action for each",
-                "Do a 4-7-8 breathing cycle — 4 in, 7 hold, 8 out — 4 rounds",
-            ],
-            "evening":   [
-                "Do a 10-minute meditation or mindfulness session before bed",
-                "Journal about your day — what stressed you and what helped",
-                "Do a gratitude practice — 5 specific things you're grateful for",
-                "Have a tech-free hour before bed — no screens at all",
-                "Take a warm bath with Epsom salts to release physical tension",
-            ],
-            "anytime":   [
-                "Practice single-tasking — do one thing at a time all day",
-                "Say no to one non-essential commitment today",
-                "Spend 10 minutes in nature — park, garden, or open sky",
-                "Call a friend instead of texting — voice reduces stress more",
-                "Do a 10-minute mindfulness exercise — focus only on your senses",
-            ],
-        },
-        "advanced": {
-            "morning":   [
-                "Complete a 15-minute meditation before starting your day",
-                "Do a cold exposure — cold shower or face dip — for stress resilience",
-                "Write your morning pages — 3 pages of uncensored thoughts",
-                "Practice loving-kindness meditation for 10 minutes",
-                "Set your nervous system baseline — breathwork before any stimulation",
-            ],
-            "afternoon": [
-                "Take a complete screen break for 30 minutes this afternoon",
-                "Practice deliberate non-doing — 15 minutes of pure stillness",
-                "Do a stress-response audit — what triggered you today and why",
-                "Walk in nature for 20 minutes with no phone or headphones",
-                "Do a full body yoga flow for 15 minutes during your break",
-            ],
-            "evening":   [
-                "Complete a 20-minute evening meditation before sleep",
-                "Write a detailed gratitude journal — 5 entries with full context",
-                "Do a weekly emotional review — what patterns did you notice",
-                "Practice non-sleep deep rest — 20-minute NSDR protocol",
-                "End the day with a 10-minute breathing session in the dark",
-            ],
-            "anytime":   [
-                "Maintain a stress journal for one full day — note every trigger",
-                "Practice the 5-5-5 rule for every anxious thought today",
-                "Spend 20 minutes in complete solitude with no input",
-                "Meditate for 20 minutes — no guided audio, just breath",
-                "Review your weekly emotional patterns and identify one root cause",
-            ],
-        },
-    },
-    "connect": {
-        "beginner": {
-            "morning":   [
-                "Send one genuine good morning message to someone you care about",
-                "Text one person just to say you were thinking of them",
-                "Reply to one message you have been putting off",
-                "Wish a colleague a genuine good morning today",
-                "Write a 2-line message to someone you have not spoken to in a while",
-            ],
-            "afternoon": [
-                "Give one specific genuine compliment to someone today",
-                "Put your phone face-down during your next conversation",
-                "Ask someone how they really are — and actually listen",
-                "Make eye contact and smile at the next person you pass",
-                "Thank someone who helped you recently — be specific",
-            ],
-            "evening":   [
-                "Have a device-free conversation with someone at home",
-                "Call instead of texting one person today",
-                "Tell someone one thing you appreciate about them",
-                "Share something funny or uplifting with a friend",
-                "Check in on someone who might be going through a hard time",
-            ],
-            "anytime":   [
-                "Reach out to one person you have lost touch with",
-                "Say yes to a social invitation you might normally decline",
-                "Listen fully in your next conversation — no phone, no distraction",
-                "Remember one person's name today and use it",
-                "Do one kind thing for a stranger today",
-            ],
-        },
-        "intermediate": {
-            "morning":   [
-                "Send a voice note instead of a text to someone close",
-                "Write a heartfelt message to someone who has helped you",
-                "Plan one social activity for this week and send the invite",
-                "Call a family member you have not spoken to recently",
-                "Send an encouraging message to someone working toward a goal",
-            ],
-            "afternoon": [
-                "Have lunch with a colleague instead of eating alone",
-                "Ask a meaningful question in your next conversation",
-                "Introduce yourself to one person you see regularly but do not know",
-                "Offer help to someone before they ask for it",
-                "Share something vulnerable — a real feeling or experience",
-            ],
-            "evening":   [
-                "Have a 20-minute uninterrupted conversation with someone you love",
-                "Write a letter — physical or digital — to someone important",
-                "Plan a date or catch-up with a friend you have been meaning to see",
-                "Express gratitude to three specific people today",
-                "Ask someone to share something good that happened to them today",
-            ],
-            "anytime":   [
-                "Join a group or community around something you enjoy",
-                "Volunteer 30 minutes of your time to help someone today",
-                "Deepen one existing relationship — go beyond small talk",
-                "Be fully present in every interaction today — no half-attention",
-                "Forgive someone — mentally release a grudge you have been holding",
-            ],
-        },
-        "advanced": {
-            "morning":   [
-                "Write a detailed appreciation letter to someone who shaped you",
-                "Reach out to a mentor or someone you admire with a specific question",
-                "Plan a meaningful shared experience with someone important",
-                "Start a weekly check-in ritual with a close friend",
-                "Identify one relationship you want to invest more in this month",
-            ],
-            "afternoon": [
-                "Have a deep conversation about values or dreams with someone",
-                "Mentor or teach someone a skill you have mastered",
-                "Resolve a conflict or misunderstanding you have been avoiding",
-                "Create a shared goal with someone — fitness, learning, or growth",
-                "Practice active listening for one full hour — ask and listen only",
-            ],
-            "evening":   [
-                "Reflect on your key relationships — who needs more of your time",
-                "Create a connection ritual — weekly dinner, walk, or call",
-                "Write down what you want your closest relationships to feel like",
-                "Express love or appreciation in a non-verbal way today",
-                "Invest in one friendship you have been neglecting",
-            ],
-            "anytime":   [
-                "Map your social network — who energises you and who drains you",
-                "Build a new meaningful connection with someone outside your circle",
-                "Commit to one hour per week of undivided attention for a key person",
-                "Create community — host something, organise something, bring people together",
-                "Practice radical generosity — give time, attention, or resources",
-            ],
-        },
-    },
-    "focus": {
-        "beginner": {
-            "morning":   [
-                "Write your single most important task before opening email",
-                "Read one page of a book before reaching for your phone",
-                "Spend 2 minutes thinking about what success looks like today",
-                "Write your top 3 priorities for the day before anything else",
-                "Say your main goal out loud before sitting at your desk",
-            ],
-            "afternoon": [
-                "Close all browser tabs except the one you are working on",
-                "Set a 25-minute focus timer and work on one task only",
-                "Turn off all notifications for the next 30 minutes",
-                "Review your task list and cross off one thing you have been avoiding",
-                "Write down what done looks like for your main task today",
-            ],
-            "evening":   [
-                "Write tomorrow's top priority before closing your laptop",
-                "Review what you accomplished today — even the small wins",
-                "Clear your desk or workspace for tomorrow",
-                "Spend 5 minutes planning the next day so your morning is clear",
-                "Write one thing you are proud of from today",
-            ],
-            "anytime":   [
-                "Do the hardest task first — before anything else",
-                "Say no to one thing that does not align with your priorities",
-                "Spend 5 minutes on a goal that matters to you — just 5 minutes",
-                "Write your long-term goal somewhere visible today",
-                "Remove one distraction from your environment right now",
-            ],
-        },
-        "intermediate": {
-            "morning":   [
-                "Complete your most important task in the first 90 minutes of work",
-                "Do a 10-minute review of your goals before starting work",
-                "Write your MIT — most important task — and do it before meetings",
-                "Plan your day in time blocks before it begins",
-                "Spend 10 minutes reading something that develops your skills",
-            ],
-            "afternoon": [
-                "Complete a full Pomodoro — 25 minutes deep work, 5 rest, repeat",
-                "Batch your emails into one 20-minute block instead of checking constantly",
-                "Do a mid-day review — are you working on the right things",
-                "Eliminate one low-value task from your list today",
-                "Work in a distraction-free environment for one full hour",
-            ],
-            "evening":   [
-                "Do a weekly review — what moved you forward and what did not",
-                "Read for 20 minutes in your area of growth or interest",
-                "Write in a journal about your progress toward your main goal",
-                "Reflect on one decision you made today and what you would do differently",
-                "Plan tomorrow in detail so you can start without friction",
-            ],
-            "anytime":   [
-                "Complete your three MITs before doing anything reactive",
-                "Spend 30 minutes on your most important long-term goal today",
-                "Audit your time — where is it going and is it aligned with your goals",
-                "Learn one new thing today and teach it to someone else",
-                "Remove your phone from your workspace for the next 2 hours",
-            ],
-        },
-        "advanced": {
-            "morning":   [
-                "Complete a 90-minute deep work block before any meetings",
-                "Review your quarterly goals and align today's work with them",
-                "Do a morning startup ritual — review, plan, and commit",
-                "Write your one wildly important goal and identify today's step",
-                "Read for 30 minutes in your area of expertise before work",
-            ],
-            "afternoon": [
-                "Do two full Pomodoro cycles on your most important project",
-                "Conduct a time audit — track every 30-minute block today",
-                "Complete a project or task that has been sitting unfinished",
-                "Identify the one thing that if done will make everything else easier",
-                "Block 2 hours of maker time — no calls, no email, deep work only",
-            ],
-            "evening":   [
-                "Do a shutdown ritual — clear inbox, write tomorrow's plan, close systems",
-                "Reflect on your performance today — score yourself 1-10 and explain",
-                "Read or learn for 30 minutes in service of your long-term goal",
-                "Write your vision statement and read it before sleep",
-                "Review your week and identify the one change that would have the biggest impact",
-            ],
-            "anytime":   [
-                "Protect your peak energy hours for your most important work",
-                "Eliminate your biggest time waster — identify and cut it today",
-                "Create a system for one recurring task to save future time",
-                "Work toward your one-year goal for at least one hour today",
-                "Review your life priorities and ensure your daily actions match",
-            ],
-        },
-    },
+# ── HABIT LADDER ─────────────────────────────────────────
+# 5 rungs per pillar — user masters each before unlocking next
+LADDER = {
+    "fuel": [
+        {"habit": "Drink a full glass of water before your first coffee", "desc": "Anchor to your morning routine. Takes 30 seconds."},
+        {"habit": "Eat breakfast sitting down with no phone or screens", "desc": "One mindful meal a day changes your relationship with food."},
+        {"habit": "Add a source of protein to every meal today", "desc": "Eggs, nuts, yogurt, chicken — any protein counts."},
+        {"habit": "Plan tomorrow's meals before you go to bed tonight", "desc": "5 minutes of planning saves hours of bad decisions."},
+        {"habit": "Eat whole foods for every meal today — nothing ultra-processed", "desc": "This is Fuel mastery. Your body will thank you."},
+    ],
+    "move": [
+        {"habit": "Do 5 push-ups before stepping into the shower", "desc": "Anchor to your shower routine. Always happens."},
+        {"habit": "Take a 10-minute walk outside after lunch", "desc": "Movement after eating improves energy and digestion."},
+        {"habit": "Complete a 20-minute workout — any type counts", "desc": "Three times this week. Build the pattern."},
+        {"habit": "Hit 7000 steps today — track it on your phone", "desc": "Daily movement is more important than occasional exercise."},
+        {"habit": "Complete your planned training session — no shortcuts", "desc": "This is Move mastery. You show up every time."},
+    ],
+    "rest": [
+        {"habit": "Make your bed within 5 minutes of waking up", "desc": "First win of the day. Sets the tone for everything."},
+        {"habit": "Put your phone in another room 15 minutes before sleep", "desc": "The single biggest sleep quality improvement you can make."},
+        {"habit": "Go to bed at the same time as last night", "desc": "Consistency beats duration. Same time every night."},
+        {"habit": "Get 10 minutes of natural light within 30 minutes of waking", "desc": "Sets your circadian rhythm for the whole day."},
+        {"habit": "Complete a full wind-down routine — no screens, dim lights, same steps every night", "desc": "This is Rest mastery. Sleep is your superpower."},
+    ],
+    "calm": [
+        {"habit": "Take 3 slow deep breaths before opening any social app", "desc": "Creates a pause between stimulus and response."},
+        {"habit": "Write one thing you are grateful for before checking your phone", "desc": "Trains your brain to scan for good before bad."},
+        {"habit": "Sit in silence for 5 minutes with your morning drink", "desc": "No inputs. Just you and your thoughts."},
+        {"habit": "Do a 10-minute guided meditation today", "desc": "Use any app or YouTube. Consistency matters more than perfection."},
+        {"habit": "Complete a full mindfulness practice — meditation, journaling, and one intentional breath break", "desc": "This is Calm mastery. You own your nervous system."},
+    ],
+    "connect": [
+        {"habit": "Send one genuine message to someone you care about", "desc": "Not a reply — an initiation. You reach out first."},
+        {"habit": "Give one specific genuine compliment to someone today", "desc": "Specific beats generic. Name what you actually appreciate."},
+        {"habit": "Have one conversation today with your phone face-down", "desc": "Full presence is the rarest gift you can give."},
+        {"habit": "Call instead of texting one person today", "desc": "Voice builds connection that text never can."},
+        {"habit": "Plan and commit to one meaningful in-person connection this week", "desc": "This is Connect mastery. Relationships are your wealth."},
+    ],
+    "focus": [
+        {"habit": "Write your single most important task before opening email", "desc": "Name your MIT — Most Important Task — before the noise starts."},
+        {"habit": "Set a 25-minute timer and work on one thing only", "desc": "One Pomodoro. No switching. No checking."},
+        {"habit": "Complete your three most important tasks before any reactive work", "desc": "Lead with creation, not response."},
+        {"habit": "Block 90 minutes of deep work with no interruptions", "desc": "Your best work happens in uninterrupted flow."},
+        {"habit": "Finish the day with a full shutdown ritual — clear inbox, write tomorrow's plan", "desc": "This is Focus mastery. Your time belongs to you."},
+    ],
 }
-
-def get_habit(pillar_id, streak=0, hour=None, mood=None, profile=None, used_today=None):
-    """Get a contextual habit from the library. Never repeats within a session."""
-    if hour is None:
-        hour = datetime.now().hour
-    if used_today is None:
-        used_today = []
-
-    # Determine level
-    if streak < 8:
-        level = "beginner"
-    elif streak < 22:
-        level = "intermediate"
-    else:
-        level = "advanced"
-
-    # Determine time of day
-    if hour < 11:
-        tod = "morning"
-    elif hour < 16:
-        tod = "afternoon"
-    else:
-        tod = "evening"
-
-    # Adjust for mood
-    if mood in ("low", "very_low"):
-        level = "beginner"  # easier habits when struggling
-
-    # Adjust for health conditions
-    if profile:
-        conditions = profile.get("conditions", [])
-        if any(c in ["arthritis","injury","chronic pain"] for c in conditions):
-            if pillar_id == "move":
-                tod = "morning"  # gentler morning movement
-
-    pillar_habits = HABIT_LIBRARY.get(pillar_id, {})
-    level_habits = pillar_habits.get(level, pillar_habits.get("beginner", {}))
-
-    # Try time-specific first, then anytime, then any other time
-    candidates = []
-    for t in [tod, "anytime", "morning", "afternoon", "evening"]:
-        pool = level_habits.get(t, [])
-        available = [h for h in pool if h not in used_today]
-        candidates.extend(available)
-        if len(candidates) >= 3:
-            break
-
-    if not candidates:
-        # Ultimate fallback
-        all_habits = []
-        for t_habits in level_habits.values():
-            all_habits.extend(t_habits)
-        candidates = [h for h in all_habits if h not in used_today] or all_habits
-
-    return random.choice(candidates) if candidates else "Do one small action for " + pillar_id
-
-def get_three_habits(pillar_ids, streak=0, mood=None, profile=None):
-    """Get 3 unique habits for the day — Easy, Normal, Challenge variants."""
-    used = []
-    result = {}
-    for pid in pillar_ids:
-        h = get_habit(pid, streak=streak, mood=mood, profile=profile, used_today=used)
-        result[pid] = h
-        used.append(h)
-    return result
-
-# Keep FALLBACK for backward compatibility
-FALLBACK = {
-    pid: [get_habit(pid) for _ in range(3)]
-    for pid in ["fuel","move","rest","calm","connect","focus"]
-}
-
 
 SLOTS = {
     "morning":   {"label":"Morning",   "default":"07:00"},
@@ -681,31 +382,232 @@ SLOTS = {
     "night":     {"label":"Night",     "default":"21:00"},
 }
 
+TIMEZONES = {
+    "New York":      "America/New_York",
+    "Chicago":       "America/Chicago",
+    "Los Angeles":   "America/Los_Angeles",
+    "Toronto":       "America/Toronto",
+    "Sao Paulo":     "America/Sao_Paulo",
+    "London":        "Europe/London",
+    "Paris":         "Europe/Paris",
+    "Berlin":        "Europe/Berlin",
+    "Madrid":        "Europe/Madrid",
+    "Amsterdam":     "Europe/Amsterdam",
+    "Dubai":         "Asia/Dubai",
+    "Riyadh":        "Asia/Riyadh",
+    "Cairo":         "Africa/Cairo",
+    "Istanbul":      "Europe/Istanbul",
+    "Nairobi":       "Africa/Nairobi",
+    "Mumbai":        "Asia/Kolkata",
+    "Singapore":     "Asia/Singapore",
+    "Hong Kong":     "Asia/Hong_Kong",
+    "Tokyo":         "Asia/Tokyo",
+    "Sydney":        "Australia/Sydney",
+}
+
+TZ_REGIONS = {
+    "Americas":    ["New York","Chicago","Los Angeles","Toronto","Sao Paulo"],
+    "Europe":      ["London","Paris","Berlin","Madrid","Amsterdam"],
+    "Middle East": ["Dubai","Riyadh","Cairo","Istanbul","Nairobi"],
+    "Asia":        ["Mumbai","Singapore","Hong Kong","Tokyo","Sydney"],
+}
+
+# ── SMART QUESTIONNAIRE ─────────────────────────────────
+# Replaces both assessment and health profile
+# Each answer maps to a pillar score + rich profile data
+
+QUESTIONNAIRE = [
+    {
+        "id": "fuel",
+        "pillar": "fuel",
+        "question": "How would you describe your eating habits?",
+        "emoji": "⚡",
+        "answers": [
+            {"text": "I eat whatever, whenever — not much thought goes into it", "score": 1, "profile": "poor nutrition habits, likely high processed food intake"},
+            {"text": "Pretty decent but inconsistent — good days and bad days", "score": 2, "profile": "moderate nutrition, inconsistent habits"},
+            {"text": "I eat well most of the time — mostly whole foods", "score": 3, "profile": "good nutrition habits, some room for improvement"},
+            {"text": "Very intentional — I track, plan and prioritise nutrition", "score": 4, "profile": "strong nutrition habits, high nutritional awareness"},
+        ]
+    },
+    {
+        "id": "move",
+        "pillar": "move",
+        "question": "How active are you on a typical week?",
+        "emoji": "💪",
+        "answers": [
+            {"text": "Mostly sedentary — I sit most of the day", "score": 1, "profile": "sedentary lifestyle, needs movement foundation"},
+            {"text": "Light activity — occasional walks or casual exercise", "score": 2, "profile": "lightly active, building exercise habit"},
+            {"text": "Moderately active — I exercise 2-3 times a week", "score": 3, "profile": "moderately active, consistent but room to grow"},
+            {"text": "Very active — I train regularly and hit my step goals", "score": 4, "profile": "highly active, performance-focused"},
+        ]
+    },
+    {
+        "id": "rest",
+        "pillar": "rest",
+        "question": "How well do you sleep and recover?",
+        "emoji": "😴",
+        "answers": [
+            {"text": "Poorly — I rarely get enough sleep and feel tired daily", "score": 1, "profile": "poor sleep quality, chronic fatigue likely"},
+            {"text": "Inconsistent — some good nights, many bad ones", "score": 2, "profile": "inconsistent sleep, no solid sleep routine"},
+            {"text": "Fairly well — I usually get 6-7 hours most nights", "score": 3, "profile": "decent sleep, small improvements needed"},
+            {"text": "Really well — 7-8 hours, consistent schedule, wake refreshed", "score": 4, "profile": "good sleep hygiene, optimised recovery"},
+        ]
+    },
+    {
+        "id": "calm",
+        "pillar": "calm",
+        "question": "How do you handle stress and your mental state?",
+        "emoji": "🧘",
+        "answers": [
+            {"text": "I feel overwhelmed often — stress controls me", "score": 1, "profile": "high chronic stress, needs foundational calm practices"},
+            {"text": "I manage but it takes effort — some anxiety day to day", "score": 2, "profile": "moderate stress, developing coping strategies"},
+            {"text": "Pretty balanced — I have tools to manage stress most of the time", "score": 3, "profile": "good stress management, some refinement needed"},
+            {"text": "Very calm and grounded — I have strong mindfulness practices", "score": 4, "profile": "strong mental resilience, mindfulness practitioner"},
+        ]
+    },
+    {
+        "id": "connect",
+        "pillar": "connect",
+        "question": "How would you describe your relationships and social life?",
+        "emoji": "🤝",
+        "answers": [
+            {"text": "Isolated — I feel disconnected from people around me", "score": 1, "profile": "socially isolated, needs connection foundation"},
+            {"text": "Okay but surface level — I want deeper connections", "score": 2, "profile": "superficial connections, craving depth"},
+            {"text": "Good relationships — I have people I can rely on", "score": 3, "profile": "solid social foundation, can deepen further"},
+            {"text": "Thriving — rich meaningful relationships and strong community", "score": 4, "profile": "strong social network, community builder"},
+        ]
+    },
+    {
+        "id": "focus",
+        "pillar": "focus",
+        "question": "How focused and purposeful do you feel in daily life?",
+        "emoji": "🎯",
+        "answers": [
+            {"text": "Scattered — I feel lost, distracted and without clear direction", "score": 1, "profile": "low focus and purpose, needs clarity and structure"},
+            {"text": "Somewhat focused — I have goals but struggle to stay on track", "score": 2, "profile": "moderate focus, procrastination and distraction challenges"},
+            {"text": "Pretty focused — I know my priorities and work toward them", "score": 3, "profile": "good focus habits, can optimise further"},
+            {"text": "Laser focused — clear purpose, deep work, consistent execution", "score": 4, "profile": "high performer, strong focus and purpose clarity"},
+        ]
+    },
+    {
+        "id": "age",
+        "pillar": None,
+        "question": "How old are you?",
+        "emoji": "🎂",
+        "answers": [
+            {"text": "Under 25", "score": None, "profile": "under 25, building foundations"},
+            {"text": "25-35", "score": None, "profile": "25-35, peak building years"},
+            {"text": "36-50", "score": None, "profile": "36-50, optimisation phase"},
+            {"text": "Over 50", "score": None, "profile": "over 50, longevity focus"},
+        ]
+    },
+    {
+        "id": "sex",
+        "pillar": None,
+        "question": "What is your biological sex?",
+        "emoji": "👤",
+        "answers": [
+            {"text": "Male", "score": None, "profile": "male"},
+            {"text": "Female", "score": None, "profile": "female"},
+            {"text": "Prefer not to say", "score": None, "profile": "unspecified"},
+        ]
+    },
+    {
+        "id": "conditions",
+        "pillar": None,
+        "question": "Any health conditions I should know about?",
+        "emoji": "🏥",
+        "answers": [
+            {"text": "None — I am in good health", "score": None, "profile": "no conditions"},
+            {"text": "Diabetes or blood sugar issues", "score": None, "profile": "diabetes/blood sugar"},
+            {"text": "Heart condition or hypertension", "score": None, "profile": "cardiovascular condition"},
+            {"text": "Anxiety, depression or mental health", "score": None, "profile": "mental health condition"},
+            {"text": "Joint pain, arthritis or mobility issues", "score": None, "profile": "mobility/joint issues"},
+            {"text": "Other — I will mention it in chat", "score": None, "profile": "other condition"},
+        ]
+    },
+    {
+        "id": "goal",
+        "pillar": None,
+        "question": "What is your biggest goal right now?",
+        "emoji": "🏆",
+        "answers": [
+            {"text": "Lose weight and improve my body", "score": None, "profile": "weight loss and body composition"},
+            {"text": "Reduce stress and feel more calm", "score": None, "profile": "stress reduction and mental wellness"},
+            {"text": "Build better daily routines and discipline", "score": None, "profile": "habit building and routine"},
+            {"text": "Improve energy and feel better every day", "score": None, "profile": "energy and vitality"},
+            {"text": "Perform better at work or sport", "score": None, "profile": "performance optimisation"},
+            {"text": "Live a longer healthier life", "score": None, "profile": "longevity and preventive health"},
+        ]
+    },
+]
+
+def get_q_keyboard(q_data):
+    """Build keyboard for a questionnaire question."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(a["text"][:60], callback_data=f"q_{q_data['id']}_{i}")]
+        for i, a in enumerate(q_data["answers"])
+    ])
+
+def next_question_idx(current_id):
+    """Get index of next question."""
+    ids = [q["id"] for q in QUESTIONNAIRE]
+    if current_id in ids:
+        idx = ids.index(current_id)
+        if idx + 1 < len(QUESTIONNAIRE):
+            return idx + 1
+    return None
+
 users = {}
 
 def get_user(uid):
     if uid not in users:
         users[uid] = {
-            "name":"", "step":"welcome", "scores":{}, "streak":0,
-            "today_pillars":[], "today_habits":{}, "checked":{},
-            "timezone":"UTC",
-            "reminders":{"morning":"07:00","midday":"12:00","afternoon":"16:00","night":"21:00"},
-            "reminders_active":False, "setting_slot":None,
-            "personal_goals":[], "adding_goal":False, "onboarding":None,
-            "weekly_history":[], "score_history":[], "last_checkin_date":None,
-            "mood":None, "mood_date":None, "last_active_date":None,
-            "missed_days_alerted":False, "pattern_sent_week":None,
-            "profile":{
-                "age":None, "sex":None, "fitness":None,
-                "conditions":[], "medications":[],
-                "sleep_quality":None, "stress_level":None,
-            },
-            "profile_step":None,
-            "macro_log":[],  # list of daily macro entries
+            "name": "", "step": "welcome",
+            "scores": {}, "streak": 0,
+            "timezone": "UTC",
+            "reminders": {"morning":"07:00","midday":"12:00","afternoon":"16:00","night":"21:00"},
+            "reminders_active": False,
+            "personal_goals": [], "adding_goal": False,
+            "profile": {"age":None,"sex":None,"fitness":None,"conditions":[],"medications":[],"sleep_quality":None,"stress_level":None},
+            "profile_step": None,
+            "onboarding": None, "setting_slot": None, "q_index": 0, "q_answers": {},
+            # Habit ladder progress per pillar
+            "ladder": {pid: {"rung": 0, "days": 0, "last_date": None} for pid in PIDS},
+            "checked_today": {},      # pid -> True if done today
+            "macro_log": [],
+            "weekly_history": [],
+            "score_history": [],
+            "mood": None, "mood_date": None,
+            "last_active_date": None,
+            "missed_days_alerted": False,
+            "pattern_sent_week": None,
         }
     return users[uid]
 
-# ── GROQ AI ──────────────────────────────────────────────
+def get_current_habit(user, pid):
+    """Get the current habit for a pillar based on ladder progress."""
+    rung = user["ladder"][pid]["rung"]
+    rung = min(rung, len(LADDER[pid]) - 1)
+    return LADDER[pid][rung]
+
+def get_rung_display(user, pid):
+    """Get rung display string."""
+    rung = user["ladder"][pid]["rung"]
+    days = user["ladder"][pid]["days"]
+    total = len(LADDER[pid])
+    return f"Rung {rung+1}/{total} · {days} days"
+
+def can_unlock_next(user, pid):
+    """Check if user can unlock next rung."""
+    rung = user["ladder"][pid]["rung"]
+    return rung < len(LADDER[pid]) - 1
+
+def is_mastered(user, pid):
+    """Check if pillar is fully mastered."""
+    return user["ladder"][pid]["rung"] >= len(LADDER[pid]) - 1 and user["ladder"][pid]["days"] >= 1
+
+# ── GROQ ─────────────────────────────────────────────────
 async def groq(prompt, system, max_tokens=300):
     import httpx
     if not GROQ_API_KEY:
@@ -719,301 +621,53 @@ async def groq(prompt, system, max_tokens=300):
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"].strip()
 
-async def ai_pick_pillars(user):
-    scores = user["scores"]
-    if not scores:
-        return random.sample(PIDS, 3)
-    try:
-        result = await groq(
-            f"Scores (1-5 lower=needs work): {json.dumps(scores)}. Streak: {user['streak']}. Pick best 3 pillar IDs for today. Balance weakness and variety. IDs: {PIDS}. Return ONLY: [\"id1\",\"id2\",\"id3\"]",
-            "Habit coach. Return ONLY a JSON array of 3 pillar IDs. No explanation.", max_tokens=50
-        )
-        p = json.loads(result.strip())
-        if isinstance(p, list) and len(p)==3 and all(x in PIDS for x in p):
-            return p
-    except Exception as e:
-        print(f"pillar err: {e}")
-    return random.sample(sorted(PIDS, key=lambda p: scores.get(p,3))[:4], 3)
-
-async def ai_habits(user, pids):
-    hour = datetime.now().hour
-    tod = "morning" if hour<12 else "afternoon" if hour<17 else "evening"
-    streak = user["streak"]
-    level = "beginner" if streak<7 else "intermediate" if streak<21 else "advanced"
-    goals = user.get("personal_goals",[])
-    goals_str = f" Goals: {', '.join(goals)}." if goals else ""
-    info = ", ".join([f"{PILLARS[p]['name']} ({user['scores'].get(p,'?')}/5)" for p in pids])
-    mood = user.get("mood")
-    mood_str = f" Mood today: {mood}." if mood else ""
-
-    # Build health profile context
-    profile = user.get("profile", {})
-    parts = []
-    if profile.get("age"): parts.append(f"Age {profile['age']}")
-    if profile.get("sex"): parts.append(f"Sex: {profile['sex']}")
-    if profile.get("fitness"): parts.append(f"Fitness: {profile['fitness']}")
-    if profile.get("conditions"): parts.append(f"Conditions: {', '.join(profile['conditions'])}")
-    if profile.get("medications"): parts.append(f"Medications: {', '.join(profile['medications'])}")
-    if profile.get("sleep_quality"): parts.append(f"Sleep: {profile['sleep_quality']}")
-    if profile.get("stress_level"): parts.append(f"Stress: {profile['stress_level']}")
-    profile_str = f" Health profile: {'. '.join(parts)}." if parts else ""
-
-    try:
-        result = await groq(
-            f"3 tiny habits for {user['name'] or 'user'}, one per pillar: {info}. "
-            f"Time: {tod}. Level: {level}. Streak: {streak}.{goals_str}{mood_str}{profile_str} "
-            f"CRITICAL: Adapt every habit to their health profile, age, conditions and medications. "
-            f"Under 2 min each. Safe, specific, personalised. "
-            f"Return ONLY: {{\"{pids[0]}\":\"habit\",\"{pids[1]}\":\"habit\",\"{pids[2]}\":\"habit\"}}",
-            "Evidence-based habit coach. Adapt to age, sex, medical conditions and medications. Safe personalised habits. Return ONLY valid JSON.",
-            max_tokens=200
-        )
-        h = json.loads(result.strip().replace("```json","").replace("```",""))
-        if all(p in h for p in pids):
-            return h
-    except Exception as e:
-        print(f"habit err: {e}")
-    return {p: random.choice(FALLBACK.get(p,["Do one small thing"])) for p in pids}
-
 async def ai_msg(user, purpose):
     name = user["name"] or "champ"
     streak = user["streak"]
-    done = len(user.get("checked",{}))
-    total = len(user.get("today_pillars",[]))
     prompts = {
-        "morning":   f"Morning message for {name}. Streak: {streak}. Punchy opener. 1 sentence.",
-        "midday":    f"Midday nudge for {name}. Done {done}/{total} habits. 1 punchy sentence.",
-        "afternoon": f"Afternoon push for {name}. Done {done}/{total}. 1 sentence.",
-        "night":     f"Night wrap for {name}. Done {done}/{total}. Streak {streak}. Honest. 1-2 sentences.",
-        "all_done":  f"{name} completed all {total} habits. Streak {streak}. Short celebration. Make it feel earned.",
-        "start":     f"{name} just started CoreSix. One punchy welcome. Make them feel ready.",
+        "morning":  f"Morning message for {name}. Streak: {streak}. 1 punchy sentence.",
+        "all_done": f"{name} completed all habits today. Streak {streak}. Short celebration. Make it feel earned.",
+        "start":    f"{name} just started CoreSix. One punchy welcome. Make them feel ready.",
+        "mastered": f"{name} just mastered a habit after {streak} days. Celebrate this milestone. 2 sentences max.",
     }
     try:
-        return await groq(prompts.get(purpose, prompts["morning"]), "Direct habit coach. Short punchy texts. Max 2 sentences. No fluff.", max_tokens=80)
+        return await groq(prompts.get(purpose,"Keep going."), "Direct habit coach. Short punchy texts. Max 2 sentences.", max_tokens=80)
     except:
-        defaults = {"morning":f"Morning {name}. Let's go.","midday":f"{done}/{total} done. Keep moving.","afternoon":f"Still time. {done}/{total} done.","night":f"Day done. {done}/{total} habits. {streak} streak.","all_done":f"All done. {streak} days straight.","start":f"Welcome {name}. One habit at a time."}
+        defaults = {"morning":f"Morning {name}. Let's go.","all_done":f"All done. {streak} days straight.","start":f"Welcome {name}. One habit at a time.","mastered":f"Mastered. That habit is yours forever now, {name}."}
         return defaults.get(purpose,"Keep going.")
 
-# ── WEEKLY REPORT ────────────────────────────────────────
-async def weekly_report(user):
-    h7 = user.get("weekly_history",[])[-7:]
-    days = len(h7)
-    total = sum(len(r.get("pillars",[])) for r in h7)
-    pc = {}
-    dc = {}
-    for r in h7:
-        for p in r.get("pillars",[]): pc[p] = pc.get(p,0)+1
-        dc[r.get("day_of_week","")] = dc.get(r.get("day_of_week",""),0)+1
-    top = max(pc, key=pc.get) if pc else None
-    best_day = max(dc, key=dc.get) if dc else "N/A"
-    scores = user.get("scores",{})
-    weak = min(scores, key=scores.get) if scores else None
-    goals = user.get("personal_goals",[])
-    summary = f"Days: {days}/7. Habits: {total}. Streak: {user['streak']}. Top pillar: {PILLARS[top]['name'] if top else 'N/A'}. Best day: {best_day}. Weakest: {PILLARS[weak]['name']+' '+str(scores[weak])+'/5' if weak else 'N/A'}. Goals: {', '.join(goals) if goals else 'none'}."
-    try:
-        return await groq(
-            f"Weekly CoreSix report for {user['name'] or 'user'}. Data: {summary}. Cover: wins, what needs work, one focus for next week. Honest and direct.",
-            "Direct honest habit coach. Weekly review like a coach debrief. Max 5 sentences. No fluff.", max_tokens=250
-        )
-    except:
-        return f"Week done. {days}/7 days. {total} habits. Keep showing up."
-
-async def send_weekly_report(context):
-    for uid, user in users.items():
-        if user.get("step")!="active" or not user.get("weekly_history"): continue
-        try:
-            h7 = user["weekly_history"][-7:]
-            days = len(h7)
-            total = sum(len(r.get("pillars",[])) for r in h7)
-            pc = {}
-            for r in h7:
-                for p in r.get("pillars",[]): pc[p] = pc.get(p,0)+1
-            breakdown = "\n".join([f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {c}x" for p,c in sorted(pc.items(),key=lambda x:-x[1])])
-            report = await weekly_report(user)
-            await context.bot.send_message(chat_id=uid, text=f"Weekly CoreSix Report\n{datetime.now().strftime('%B %d, %Y')}\n\n{days}/7 days - {total} habits - {user['streak']} streak\n\nPillar breakdown:\n{breakdown}\n\nCoach says:\n{report}")
-            if user.get("scores"):
-                user["score_history"].append({"date":datetime.now().strftime("%Y-%m-%d"),"scores":dict(user["scores"]),"streak":user["streak"],"days":days})
-                user["score_history"] = user["score_history"][-12:]
-                save_users()
-        except Exception as e:
-            print(f"weekly err {uid}: {e}")
-
-# ── MOOD CHECK-IN ────────────────────────────────────────
-async def send_mood_checkin(context):
-    for uid, user in users.items():
-        if user.get("step")!="active": continue
-        today = datetime.now().strftime("%Y-%m-%d")
-        if user.get("mood_date")==today: continue
-        try:
-            await context.bot.send_message(
-                chat_id=uid,
-                text=f"How are you feeling today, {user['name'] or 'champ'}?",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Energised", callback_data="mood_high"), InlineKeyboardButton("Good", callback_data="mood_medium")],
-                    [InlineKeyboardButton("Tired", callback_data="mood_low"), InlineKeyboardButton("Struggling", callback_data="mood_very_low")],
-                ])
-            )
-        except Exception as e:
-            print(f"mood err {uid}: {e}")
-
-# ── MISSED DAYS ──────────────────────────────────────────
-async def check_missed_days(context):
-    today_dt = datetime.now()
-    for uid, user in users.items():
-        if user.get("step")!="active": continue
-        last = user.get("last_active_date")
-        if not last: continue
-        try:
-            days_missed = (today_dt - datetime.strptime(last, "%Y-%m-%d")).days
-            if days_missed >= 2 and not user.get("missed_days_alerted"):
-                user["missed_days_alerted"] = True
-                name = user["name"] or "champ"
-                try:
-                    msg = await groq(f"{name} missed {days_missed} days. Streak was {user['streak']}. Personal direct message to bring them back. Reference their streak. 2 sentences max.", "Direct habit coach. Personal outreach. No guilt. Real talk. Max 2 sentences.")
-                except:
-                    msg = f"{days_missed} days gone, {name}. Your {user['streak']}-day streak is waiting — one habit today brings it back."
-                await context.bot.send_message(
-                    chat_id=uid,
-                    text=f"{msg}\n\nSend /habit to get back on track.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Get Today's Habits", callback_data="get_habits_now")]])
-                )
-                save_users()
-        except Exception as e:
-            print(f"missed days err {uid}: {e}")
-
-# ── PATTERN DETECTION ────────────────────────────────────
-async def detect_patterns(context):
-    for uid, user in users.items():
-        if user.get("step")!="active" or len(user.get("weekly_history",[]))<7: continue
-        week_str = datetime.now().strftime("%Y-W%W")
-        if user.get("pattern_sent_week")==week_str: continue
-        try:
-            history = user["weekly_history"][-14:]
-            day_count = {}
-            pillar_count = {}
-            for r in history:
-                d = r.get("day_of_week","")
-                day_count[d] = day_count.get(d,0)+1
-                for p in r.get("pillars",[]): pillar_count[p] = pillar_count.get(p,0)+1
-            all_days = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-            weakest_day = min(all_days, key=lambda d: day_count.get(d,0))
-            strongest_day = max(day_count, key=day_count.get) if day_count else "N/A"
-            least_pillar = min(pillar_count, key=pillar_count.get) if pillar_count else None
-            most_pillar = max(pillar_count, key=pillar_count.get) if pillar_count else None
-            summary = f"Weakest day: {weakest_day} ({day_count.get(weakest_day,0)} check-ins). Strongest: {strongest_day}. Most done: {PILLARS[most_pillar]['name'] if most_pillar else 'N/A'}. Least done: {PILLARS[least_pillar]['name'] if least_pillar else 'N/A'}."
-            name = user["name"] or "champ"
-            try:
-                pattern_msg = await groq(f"Pattern analysis for {name}: {summary}. Write 2-3 punchy insights. Tell them WHY they might struggle on {weakest_day} and what to do.", "Direct habit coach spotting patterns. Punchy specific insights. Max 3 sentences.")
-            except:
-                pattern_msg = f"You show up most on {strongest_day} and least on {weakest_day}. {PILLARS[least_pillar]['name'] if least_pillar else 'One pillar'} keeps getting skipped. Fix: do it first thing on {weakest_day}."
-            await context.bot.send_message(chat_id=uid, text=f"Pattern detected, {name}.\n\n{pattern_msg}\n\nSend /status to see your full breakdown.")
-            user["pattern_sent_week"] = week_str
-            save_users()
-        except Exception as e:
-            print(f"pattern err {uid}: {e}")
-
-# ── REMINDER JOB ─────────────────────────────────────────
-async def send_reminder(context):
-    uid = context.job.data["uid"]
-    purpose = context.job.data["purpose"]
-    user = get_user(uid)
-    if not user["reminders_active"]: return
-    if purpose=="morning":
-        user["checked"] = {}
-        pids = await ai_pick_pillars(user)
-        habits = await ai_habits(user, pids)
-        user["today_pillars"] = pids
-        user["today_habits"] = habits
-    msg = await ai_msg(user, purpose)
-    icons = {"morning":"Morning","midday":"Midday","afternoon":"Afternoon","night":"Night"}
-    try:
-        if purpose=="morning" and user["today_pillars"]:
-            lines = [f"{icons[purpose]} - {msg}\n"]
-            for p in user["today_pillars"]:
-                lines.append(f"{PILLARS[p]['emoji']} {PILLARS[p]['name']} - {user['today_habits'].get(p,'')}")
-            lines.append("\nTap each when done")
-            await context.bot.send_message(chat_id=uid, text="\n".join(lines), reply_markup=habit_kb(user))
-        else:
-            await context.bot.send_message(chat_id=uid, text=f"{icons[purpose]}: {msg}", reply_markup=habit_kb(user) if user["today_pillars"] else None)
-    except Exception as e:
-        print(f"reminder err: {e}")
-
-def schedule_reminders(app, uid):
-    user = get_user(uid)
-    try: tz = pytz.timezone(user.get("timezone","UTC"))
-    except: tz = pytz.UTC
-    for job in app.job_queue.get_jobs_by_name(str(uid)):
-        job.schedule_removal()
-    if not user["reminders_active"]: return
-    for slot, info in SLOTS.items():
-        t_str = user["reminders"].get(slot, info["default"])
-        try:
-            h, m = map(int, t_str.split(":"))
-            app.job_queue.run_daily(send_reminder, time=time(hour=h, minute=m, tzinfo=tz), name=str(uid), data={"uid":uid,"purpose":slot})
-        except Exception as e:
-            print(f"schedule err {slot}: {e}")
-
-# ── KEYBOARDS ────────────────────────────────────────────
-def habit_kb(user):
+# ── KEYBOARDS ─────────────────────────────────────────────
+def main_habit_kb(user):
+    """Show today's habits with ladder info."""
     btns = []
-    for p in user.get("today_pillars",[]):
-        done = p in user.get("checked",{})
-        label = f"Done {PILLARS[p]['emoji']} {PILLARS[p]['name']}" if done else f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}"
-        btns.append([InlineKeyboardButton(label, callback_data=f"done_{p}")])
-    return InlineKeyboardMarkup(btns) if btns else None
+    today = datetime.now().strftime("%Y-%m-%d")
+    pids = get_active_pillars(user)
+    for pid in pids:
+        p = PILLARS[pid]
+        done = user["checked_today"].get(pid) == today
+        rung_info = get_rung_display(user, pid)
+        label = f"✅ {p['emoji']} {p['name']}" if done else f"{p['emoji']} {p['name']} · {rung_info}"
+        btns.append([InlineKeyboardButton(label, callback_data=f"habit_{pid}")])
+    return InlineKeyboardMarkup(btns)
 
-TIMEZONES = {
-    # Americas
-    "New York (EST)":     "America/New_York",
-    "Chicago (CST)":      "America/Chicago",
-    "Denver (MST)":       "America/Denver",
-    "Los Angeles (PST)":  "America/Los_Angeles",
-    "Toronto":            "America/Toronto",
-    "Mexico City":        "America/Mexico_City",
-    "Sao Paulo":          "America/Sao_Paulo",
-    # Europe
-    "London (GMT)":       "Europe/London",
-    "Paris (CET)":        "Europe/Paris",
-    "Berlin":             "Europe/Berlin",
-    "Madrid":             "Europe/Madrid",
-    "Rome":               "Europe/Rome",
-    "Amsterdam":          "Europe/Amsterdam",
-    "Stockholm":          "Europe/Stockholm",
-    # Middle East & Africa
-    "Dubai (GST)":        "Asia/Dubai",
-    "Riyadh":             "Asia/Riyadh",
-    "Cairo":              "Africa/Cairo",
-    "Istanbul":           "Europe/Istanbul",
-    "Tel Aviv":           "Asia/Jerusalem",
-    "Nairobi":            "Africa/Nairobi",
-    # Asia & Pacific
-    "Mumbai (IST)":       "Asia/Kolkata",
-    "Singapore":          "Asia/Singapore",
-    "Hong Kong":          "Asia/Hong_Kong",
-    "Tokyo":              "Asia/Tokyo",
-    "Sydney":             "Australia/Sydney",
-    "Auckland":           "Pacific/Auckland",
-}
+def get_active_pillars(user):
+    """Get top 3 pillars based on scores — weakest first."""
+    scores = user["scores"]
+    if not scores:
+        return PIDS[:3]
+    return sorted(PIDS, key=lambda p: scores.get(p, 3))[:3]
 
-TZ_REGIONS = {
-    "Americas":       ["New York (EST)","Chicago (CST)","Denver (MST)","Los Angeles (PST)","Toronto","Mexico City","Sao Paulo"],
-    "Europe":         ["London (GMT)","Paris (CET)","Berlin","Madrid","Rome","Amsterdam","Stockholm"],
-    "Middle East":    ["Dubai (GST)","Riyadh","Cairo","Istanbul","Tel Aviv","Nairobi"],
-    "Asia & Pacific": ["Mumbai (IST)","Singapore","Hong Kong","Tokyo","Sydney","Auckland"],
-}
-
-def tz_region_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(region, callback_data=f"tz_region_{region}")]
-        for region in TZ_REGIONS
-    ])
-
-def tz_city_kb(region):
-    cities = TZ_REGIONS.get(region, [])
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(city, callback_data=f"tz_set_{city}")]
-        for city in cities
-    ])
+def habit_detail_kb(pid, user):
+    """Keyboard for a single habit detail view."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    done = user["checked_today"].get(pid) == today
+    btns = []
+    if not done:
+        btns.append([InlineKeyboardButton("✅ I did this today!", callback_data=f"done_{pid}")])
+    if can_unlock_next(user, pid):
+        btns.append([InlineKeyboardButton("🔓 I've mastered this → unlock next", callback_data=f"unlock_{pid}")])
+    btns.append([InlineKeyboardButton("← Back to habits", callback_data="back_habits")])
+    return InlineKeyboardMarkup(btns)
 
 def reminders_kb(user):
     btns = [[InlineKeyboardButton(f"{SLOTS[s]['label']} - {user['reminders'].get(s,SLOTS[s]['default'])}", callback_data=f"setslot_{s}")] for s in SLOTS]
@@ -1022,204 +676,94 @@ def reminders_kb(user):
     btns.append([InlineKeyboardButton("Save and Activate", callback_data="save_reminders")])
     return InlineKeyboardMarkup(btns)
 
-def goals_kb(goals):
-    btns = [[InlineKeyboardButton(f"Remove: {g[:35]}", callback_data=f"rmgoal_{i}")] for i,g in enumerate(goals)]
-    btns.append([InlineKeyboardButton("Add a goal", callback_data="add_goal")])
-    if goals: btns.append([InlineKeyboardButton("Clear all goals", callback_data="clear_goals")])
-    return InlineKeyboardMarkup(btns)
-
 def score_kb(pid):
     return InlineKeyboardMarkup([[InlineKeyboardButton(str(n), callback_data=f"score_{pid}_{n}") for n in range(1,6)]])
 
-# ── FOOD PHOTO ANALYSIS ─────────────────────────────────
-async def analyse_food_photo(image_bytes, mime_type="image/jpeg"):
-    """Send food photo to Gemini Vision and get macro breakdown."""
-    import httpx, base64
-    if not GEMINI_API_KEY:
-        return None
-    b64 = base64.b64encode(image_bytes).decode()
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}",
-                json={
-                    "contents": [{
-                        "parts": [
-                            {"inline_data": {"mime_type": mime_type, "data": b64}},
-                            {"text": (
-                                "Analyse this food photo and estimate the macronutrients. "
-                                "Identify each food item visible. Estimate realistic portion sizes. "
-                                "Return ONLY valid JSON, no markdown: "
-                                '{"foods":["food1"],"calories":0,"protein_g":0,"carbs_g":0,"fat_g":0,"fibre_g":0,"confidence":"high/medium/low","notes":"notes"}'
-                            )}
-                        ]
-                    }],
-                    "generationConfig": {"temperature": 0.1, "maxOutputTokens": 500}
-                }
-            )
-            r.raise_for_status()
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            clean = text.strip().replace("```json","").replace("```","").strip()
-            return json.loads(clean)
-    except Exception as e:
-        print(f"Gemini error: {e}")
-        return None
+def tz_region_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton(r, callback_data=f"tz_region_{r}")] for r in TZ_REGIONS])
 
-async def handle_food_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Handle photo messages — analyse food and calculate macros."""
-    uid = update.effective_user.id
-    user = get_user(uid)
+def tz_city_kb(region):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(c, callback_data=f"tz_set_{c}")] for c in TZ_REGIONS.get(region,[])])
 
-    if not GEMINI_API_KEY:
-        await update.message.reply_text(
-            "Food photo analysis not set up yet.\n\nAdd GEMINI_API_KEY to Railway Variables to enable this feature."
-        )
-        return
+def goals_kb(goals):
+    btns = [[InlineKeyboardButton(f"Remove: {g[:35]}", callback_data=f"rmgoal_{i}")] for i,g in enumerate(goals)]
+    btns.append([InlineKeyboardButton("Add a goal", callback_data="add_goal")])
+    if goals:
+        btns.append([InlineKeyboardButton("Clear all", callback_data="clear_goals")])
+    return InlineKeyboardMarkup(btns)
 
-    await update.message.reply_text("Analysing your meal... give me a moment!")
-
-    try:
-        # Get the largest photo size
-        photo = update.message.photo[-1]
-        file = await ctx.bot.get_file(photo.file_id)
-        image_bytes = await file.download_as_bytearray()
-
-        result = await analyse_food_photo(bytes(image_bytes))
-
-        if not result:
-            await update.message.reply_text(
-                "Could not analyse this photo. Try a clearer photo with better lighting."
-            )
-            return
-
-        foods = result.get("foods", [])
-        calories = result.get("calories", 0)
-        protein = result.get("protein_g", 0)
-        carbs = result.get("carbs_g", 0)
-        fat = result.get("fat_g", 0)
-        fibre = result.get("fibre_g", 0)
-        confidence = result.get("confidence", "medium")
-        notes = result.get("notes", "")
-
-        # Log to user's macro history
-        entry = {
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "time": datetime.now().strftime("%H:%M"),
-            "foods": foods,
-            "calories": calories,
-            "protein_g": protein,
-            "carbs_g": carbs,
-            "fat_g": fat,
-            "fibre_g": fibre,
-        }
-        user["macro_log"].append(entry)
-        user["macro_log"] = user["macro_log"][-30:]  # keep 30 days
-        save_users()
-
-        # Calculate today's totals
-        today = datetime.now().strftime("%Y-%m-%d")
-        today_entries = [e for e in user["macro_log"] if e["date"] == today]
-        total_cal = sum(e["calories"] for e in today_entries)
-        total_protein = sum(e["protein_g"] for e in today_entries)
-        total_carbs = sum(e["carbs_g"] for e in today_entries)
-        total_fat = sum(e["fat_g"] for e in today_entries)
-        total_fibre = sum(e["fibre_g"] for e in today_entries)
-
-        conf_emoji = "✅" if confidence=="high" else "⚠️" if confidence=="medium" else "❓"
-
-        msg = (
-            f"Meal Analysis {conf_emoji}\n\n"
-            f"Foods: {', '.join(foods)}\n\n"
-            f"This meal:\n"
-            f"Calories: {calories} kcal\n"
-            f"Protein: {protein}g\n"
-            f"Carbs: {carbs}g\n"
-            f"Fat: {fat}g\n"
-            f"Fibre: {fibre}g"
-        )
-
-        if notes:
-            msg += f"\n\nNote: {notes}"
-
-        if len(today_entries) > 1:
-            msg += (
-                f"\n\nToday total ({len(today_entries)} meals):\n"
-                f"Calories: {total_cal} kcal | Protein: {total_protein}g | Carbs: {total_carbs}g | Fat: {total_fat}g"
-            )
-
-
-        # AI coaching tip based on macros and user goals
-        goals = user.get("personal_goals", [])
-        profile = user.get("profile", {})
-        try:
-            tip = await groq(
-                f"User ate: {', '.join(foods)}. Macros: {protein}g protein, {carbs}g carbs, {fat}g fat, {calories}kcal. "
-                f"Their goals: {', '.join(goals) if goals else 'none'}. "
-                f"Profile: age {profile.get('age','?')}, conditions: {', '.join(profile.get('conditions',[]))}. "
-                f"Give one specific, actionable nutrition tip based on this meal. Max 2 sentences.",
-                "Evidence-based nutrition coach. Short punchy advice. Reference actual foods eaten.",
-                max_tokens=80
-            )
-            if tip:
-                msg += f"\n\nCoach tip: {tip}"
-        except:
-            pass
-
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("View Today's Nutrition", callback_data="view_macros")],
-            [InlineKeyboardButton("Log Another Meal", callback_data="prompt_photo")],
-        ]))
-
-    except Exception as e:
-        print(f"Photo handler error: {e}")
-        await update.message.reply_text(
-            "Something went wrong analysing the photo. Try again with a clearer image."
-        )
-
-# ── COMMANDS ─────────────────────────────────────────────
+# ── COMMANDS ──────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
     user["name"] = update.effective_user.first_name or "Hero"
-    user["step"] = "welcome"
-    user["onboarding"] = "goals"
-    user["personal_goals"] = []
-    user["adding_goal"] = True
+    user["step"] = "onboarding"
+    user["onboarding"] = "questionnaire"
+    user["q_index"] = 0
+    user["q_answers"] = {}
+    q = QUESTIONNAIRE[0]
     await update.message.reply_text(
-        f"CoreSix - 6 pillars. 3 habits. Every day.\n\nWelcome {user['name']}. Let me set you up.\n\nStep 1 of 4 - Personal Goals\n\nWhat do you want to focus on? Examples:\n- Drink more water\n- Eat more protein\n- Sleep earlier\n- Reduce screen time\n\nType your first goal or tap Skip.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip Goals", callback_data="onboard_skip_goals")]])
+        f"CoreSix - 6 pillars. One habit. Master it. Level up.\n\n"
+        f"Welcome {user['name']}! Let me learn about you first.\n\n"
+        f"10 quick questions - no numbers, just honest answers.\n\n"
+        f"Question 1 of {len(QUESTIONNAIRE)}\n"
+        f"{q['emoji']} {q['question']}",
+        reply_markup=get_q_keyboard(q)
     )
 
 async def cmd_habit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
-    await update.message.reply_text("Picking your habits...")
-    user["checked"] = {}
-    pids = await ai_pick_pillars(user)
-    habits = await ai_habits(user, pids)
-    user["today_pillars"] = pids
-    user["today_habits"] = habits
-    user["last_active_date"] = datetime.now().strftime("%Y-%m-%d")
-    user["missed_days_alerted"] = False
-    save_users()
-    lines = ["Your 3 Habits Today\n"]
-    for p in pids:
-        lines.append(f"{PILLARS[p]['emoji']} {PILLARS[p]['name']} - {habits.get(p,'')}")
-    lines.append("\nTap each when done")
-    await update.message.reply_text("\n".join(lines), reply_markup=habit_kb(user))
+    if user["step"] != "active":
+        await update.message.reply_text("Send /start to set up first!")
+        return
+    pids = get_active_pillars(user)
+    today = datetime.now().strftime("%Y-%m-%d")
+    lines = [f"Your habits today - Day {user['streak']+1}\n"]
+    for pid in pids:
+        p = PILLARS[pid]
+        h = get_current_habit(user, pid)
+        done = user["checked_today"].get(pid) == today
+        rung = get_rung_display(user, pid)
+        lines.append(f"{'✅' if done else p['emoji']} {p['name']} [{rung}]")
+        if not done:
+            lines.append(f"   {h['habit']}")
+        lines.append("")
+    lines.append("Tap a pillar to check in or level up")
+    await update.message.reply_text("\n".join(lines), reply_markup=main_habit_kb(user))
+
+async def cmd_ladder(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Show full ladder progress for all pillars."""
+    uid = update.effective_user.id
+    user = get_user(uid)
+    lines = ["Your Habit Ladder Progress\n"]
+    for pid in PIDS:
+        p = PILLARS[pid]
+        rung = user["ladder"][pid]["rung"]
+        days = user["ladder"][pid]["days"]
+        total = len(LADDER[pid])
+        stars = "⭐" * (rung+1) + "☆" * (total-rung-1)
+        lines.append(f"{p['emoji']} {p['name']} {stars}")
+        lines.append(f"   Rung {rung+1}/{total} · {days} days on this habit")
+        current = LADDER[pid][min(rung, total-1)]["habit"]
+        lines.append(f"   Current: {current[:50]}...")
+        lines.append("")
+    await update.message.reply_text("\n".join(lines))
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
     scores = user["scores"]
-    sc = "\n".join([f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {scores.get(p,'?')}/5" for p in PIDS]) if scores else "Not assessed - send /assess"
-    rem = "\n".join([f"{SLOTS[s]['label']}: {user['reminders'].get(s)}" for s in SLOTS])
-    goals = user.get("personal_goals",[])
-    gtext = "\n".join([f"- {g}" for g in goals]) if goals else "None set"
-    profile = user.get("profile",{})
-    ptext = f"Age: {profile.get('age','?')} | Sex: {profile.get('sex','?')} | Fitness: {profile.get('fitness','?')}"
+    sc = "\n".join([f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {scores.get(p,'?')}/5" for p in PIDS]) if scores else "Not assessed"
+    today = datetime.now().strftime("%Y-%m-%d")
+    done_today = sum(1 for pid in PIDS if user["checked_today"].get(pid)==today)
     await update.message.reply_text(
-        f"CoreSix - {user['name']}\n\nStreak: {user['streak']} days\nToday: {len(user.get('checked',{}))}/{len(user.get('today_pillars',[]))} done\n\nScores:\n{sc}\n\nGoals:\n{gtext}\n\nProfile: {ptext}\n\nReminders ({'ON' if user['reminders_active'] else 'OFF'}):\n{rem}"
+        f"CoreSix - {user['name']}\n\n"
+        f"Streak: {user['streak']} days\n"
+        f"Done today: {done_today} habits\n\n"
+        f"Scores:\n{sc}\n\n"
+        f"Send /ladder to see your full progress\n"
+        f"Send /habit to check in"
     )
 
 async def cmd_assess(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1228,17 +772,10 @@ async def cmd_assess(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user["step"] = "assess"
     user["scores"] = {}
     p = PILLARS[PIDS[0]]
-    await update.message.reply_text(f"Rate each pillar 1-5.\n1 = struggling - 5 = thriving\n\n{p['emoji']} {p['name']} - {p['desc']}", reply_markup=score_kb(PIDS[0]))
-
-async def cmd_timezone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    user = get_user(uid)
-    current = user.get("timezone","UTC")
     await update.message.reply_text(
-        f"Your timezone: {current}\n\nChange it by picking your region:",
-        reply_markup=tz_region_kb()
+        f"Rate each pillar 1-5.\n1 = struggling - 5 = thriving\n\n{p['emoji']} {p['name']} - {p['desc']}",
+        reply_markup=score_kb(PIDS[0])
     )
-
 
 async def cmd_reminders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -1249,23 +786,22 @@ async def cmd_goals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
     goals = user.get("personal_goals",[])
-    text = "Your Personal Goals\n\n" + ("\n".join([f"{i+1}. {g}" for i,g in enumerate(goals)]) + "\n\nAI weaves these into your daily habits." if goals else "No goals set yet.")
+    text = "Your Personal Goals\n\n" + ("\n".join([f"{i+1}. {g}" for i,g in enumerate(goals)]) if goals else "No goals set yet.")
     await update.message.reply_text(text, reply_markup=goals_kb(goals))
 
 async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
-    profile = user.get("profile",{})
+    p = user.get("profile",{})
     lines = [
         "Your Health Profile\n",
-        f"Age: {profile.get('age') or 'Not set'}",
-        f"Sex: {profile.get('sex') or 'Not set'}",
-        f"Fitness level: {profile.get('fitness') or 'Not set'}",
-        f"Conditions: {', '.join(profile.get('conditions',[])) or 'None'}",
-        f"Medications: {', '.join(profile.get('medications',[])) or 'None'}",
-        f"Sleep quality: {profile.get('sleep_quality') or 'Not set'}",
-        f"Stress level: {profile.get('stress_level') or 'Not set'}",
-        "\nAI uses this to personalise every habit for you.",
+        f"Age: {p.get('age') or 'Not set'}",
+        f"Sex: {p.get('sex') or 'Not set'}",
+        f"Fitness: {p.get('fitness') or 'Not set'}",
+        f"Conditions: {', '.join(p.get('conditions',[])) or 'None'}",
+        f"Medications: {', '.join(p.get('medications',[])) or 'None'}",
+        f"Sleep: {p.get('sleep_quality') or 'Not set'}",
+        f"Stress: {p.get('stress_level') or 'Not set'}",
     ]
     await update.message.reply_text(
         "\n".join(lines),
@@ -1275,58 +811,37 @@ async def cmd_profile(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ])
     )
 
-async def cmd_macros(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Show today's macro summary."""
+async def cmd_timezone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_entries = [e for e in user.get("macro_log",[]) if e["date"]==today]
-
-    if not today_entries:
-        await update.message.reply_text("No meals logged today. Send a photo of your food to log it!")
-        return
-
-    total_cal = sum(e["calories"] for e in today_entries)
-    total_protein = sum(e["protein_g"] for e in today_entries)
-    total_carbs = sum(e["carbs_g"] for e in today_entries)
-    total_fat = sum(e["fat_g"] for e in today_entries)
-    total_fibre = sum(e["fibre_g"] for e in today_entries)
-
-    lines = [f"Today's Nutrition - {len(today_entries)} meals\n"]
-    for i, e in enumerate(today_entries, 1):
-        lines.append(f"{i}. {', '.join(e['foods'])} - {e['calories']}kcal ({e['time']})")
-
-    lines.append("\nTotals:")
-    lines.append(f"Calories: {total_cal} kcal")
-    lines.append(f"Protein: {total_protein}g")
-    lines.append(f"Carbs: {total_carbs}g")
-    lines.append(f"Fat: {total_fat}g")
-    lines.append(f"Fibre: {total_fibre}g")
-
-    await update.message.reply_text("\n".join(lines))
-
+    await update.message.reply_text(
+        f"Your timezone: {user.get('timezone','UTC')}\n\nChange it:",
+        reply_markup=tz_region_kb()
+    )
 
 async def cmd_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
     if not user.get("weekly_history"):
-        await update.message.reply_text("No data yet. Complete some habits first then come back.")
+        await update.message.reply_text("No data yet. Complete some habits first!")
         return
-    await update.message.reply_text("Generating your report...")
     h7 = user["weekly_history"][-7:]
     days = len(h7)
     total = sum(len(r.get("pillars",[])) for r in h7)
     pc = {}
-    dc = {}
     for r in h7:
         for p in r.get("pillars",[]): pc[p] = pc.get(p,0)+1
-        dc[r.get("day_of_week","")] = dc.get(r.get("day_of_week",""),0)+1
     breakdown = "\n".join([f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {c}x" for p,c in sorted(pc.items(),key=lambda x:-x[1])]) or "No data"
-    best_day = max(dc, key=dc.get) if dc else "N/A"
-    report = await weekly_report(user)
-    await update.message.reply_text(f"Weekly Report - {datetime.now().strftime('%B %d, %Y')}\n\n{days}/7 days - {total} habits - {user['streak']} streak\nBest day: {best_day}\n\nPillar breakdown:\n{breakdown}\n\nCoach says:\n{report}")
+    try:
+        report = await groq(
+            f"Weekly CoreSix report for {user['name']}. Days: {days}/7. Habits: {total}. Top pillars: {breakdown}. Give honest punchy coaching.",
+            "Direct habit coach. Weekly review. Max 4 sentences.", max_tokens=200
+        )
+    except:
+        report = f"{days}/7 days. {total} habits done. Keep showing up."
+    await update.message.reply_text(f"Weekly Report\n\n{days}/7 days - {total} habits\n\nPillar breakdown:\n{breakdown}\n\nCoach:\n{report}")
 
-# ── CALLBACKS ────────────────────────────────────────────
+# ── CALLBACKS ─────────────────────────────────────────────
 async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1334,44 +849,361 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = get_user(uid)
     data = q.data
 
-    # ── Mood ──
-    if data.startswith("mood_"):
-        mood = data.replace("mood_","")
-        mood_labels = {"high":"Energised","medium":"Good","low":"Tired","very_low":"Struggling"}
-        user["mood"] = mood_labels.get(mood, mood)
-        user["mood_date"] = datetime.now().strftime("%Y-%m-%d")
+    # ── Habit detail view ──
+    if data.startswith("habit_"):
+        pid = data.replace("habit_","")
+        p = PILLARS[pid]
+        h = get_current_habit(user, pid)
+        rung = user["ladder"][pid]["rung"]
+        days = user["ladder"][pid]["days"]
+        total = len(LADDER[pid])
+        today = datetime.now().strftime("%Y-%m-%d")
+        done = user["checked_today"].get(pid) == today
+        stars = "⭐" * (rung+1) + "☆" * (total-rung-1)
+
+        text = (
+            f"{p['emoji']} {p['name']} - Rung {rung+1} of {total}\n"
+            f"{stars}\n\n"
+            f"Your current habit:\n"
+            f"{h['habit']}\n\n"
+            f"Why this works:\n{h['desc']}\n\n"
+            f"Days on this habit: {days}\n\n"
+            f"{'✅ Done today!' if done else 'Not done yet today.'}"
+        )
+        if can_unlock_next(user, pid):
+            text += f"\n\nReady to level up? Tap below when you feel you have truly mastered this habit."
+        elif not can_unlock_next(user, pid) and rung >= total-1:
+            text += f"\n\n🏆 {p['name']} MASTERED! You have reached the top."
+
+        await q.edit_message_text(text, reply_markup=habit_detail_kb(pid, user))
+
+    # ── Mark habit done ──
+    elif data.startswith("done_"):
+        pid = data.replace("done_","")
+        today = datetime.now().strftime("%Y-%m-%d")
+        if user["checked_today"].get(pid) == today:
+            await q.answer("Already done today!")
+            return
+        user["checked_today"][pid] = today
+        user["last_active_date"] = today
         user["missed_days_alerted"] = False
-        user["last_active_date"] = datetime.now().strftime("%Y-%m-%d")
-        mood_responses = {"high":"Full energy today. Let's push.","medium":"Solid. Good day to build.","low":"Tired is fine. Tiny habits exist for days like this.","very_low":"Struggling is honest. One tiny thing is enough today."}
-        base = mood_responses.get(mood,"Got it.")
-        pids = await ai_pick_pillars(user)
-        if mood in ("low","very_low"):
-            pids = sorted(PIDS, key=lambda p: -user["scores"].get(p,3))[:3]
-        habits = await ai_habits(user, pids)
-        user["today_pillars"] = pids
-        user["today_habits"] = habits
-        user["checked"] = {}
+
+        # Update ladder days
+        last = user["ladder"][pid].get("last_date")
+        if last != today:
+            user["ladder"][pid]["days"] += 1
+            user["ladder"][pid]["last_date"] = today
+
+        # Check if all active pillars done
+        pids = get_active_pillars(user)
+        all_done = all(user["checked_today"].get(p)==today for p in pids)
+        if all_done:
+            user["streak"] += 1
+            user["weekly_history"].append({
+                "date": today,
+                "day_of_week": datetime.now().strftime("%A"),
+                "pillars": pids,
+                "streak": user["streak"],
+            })
+            user["weekly_history"] = user["weekly_history"][-30:]
+            save_users()
+            msg = await ai_msg(user, "all_done")
+            await q.edit_message_text(
+                f"All done today! Day {user['streak']} complete.\n\n{msg}\n\nSend /habit tomorrow to keep going.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("See My Ladder", callback_data="show_ladder")]])
+            )
+        else:
+            save_users()
+            p = PILLARS[pid]
+            days = user["ladder"][pid]["days"]
+            await q.edit_message_text(
+                f"Done! {p['emoji']} {p['name']} checked in. Day {days} on this habit.\n\nKeep going — tap below for your other habits.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to habits", callback_data="back_habits")]])
+            )
+
+    # ── Unlock next rung ──
+    elif data.startswith("unlock_"):
+        pid = data.replace("unlock_","")
+        p = PILLARS[pid]
+        old_rung = user["ladder"][pid]["rung"]
+        if not can_unlock_next(user, pid):
+            await q.answer("Already at the top!")
+            return
+        user["ladder"][pid]["rung"] += 1
+        user["ladder"][pid]["days"] = 0
         save_users()
-        lines = [f"{base}\n\nYour habits for today:\n"]
-        for p in pids:
-            lines.append(f"{PILLARS[p]['emoji']} {PILLARS[p]['name']} - {habits.get(p,'')}")
-        lines.append("\nTap each when done")
-        await q.edit_message_text("\n".join(lines), reply_markup=habit_kb(user))
+        new_rung = user["ladder"][pid]["rung"]
+        new_habit = LADDER[pid][new_rung]
+        msg = await ai_msg(user, "mastered")
+        await q.edit_message_text(
+            f"Rung {old_rung+1} MASTERED! {p['emoji']}\n\n{msg}\n\n"
+            f"Your new habit - Rung {new_rung+1}:\n\n"
+            f"{new_habit['habit']}\n\n"
+            f"{new_habit['desc']}\n\n"
+            f"Take your time. Master this before moving on.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to habits", callback_data="back_habits")]])
+        )
+
+    # ── Back to habits ──
+    elif data == "back_habits":
+        pids = get_active_pillars(user)
+        today = datetime.now().strftime("%Y-%m-%d")
+        lines = [f"Your habits today - Day {user['streak']+1}\n"]
+        for pid in pids:
+            p = PILLARS[pid]
+            h = get_current_habit(user, pid)
+            done = user["checked_today"].get(pid) == today
+            rung_info = get_rung_display(user, pid)
+            lines.append(f"{'✅' if done else p['emoji']} {p['name']} [{rung_info}]")
+            if not done:
+                lines.append(f"   {h['habit']}")
+            lines.append("")
+        await q.edit_message_text("\n".join(lines), reply_markup=main_habit_kb(user))
+
+    # ── Show ladder ──
+    elif data == "show_ladder":
+        lines = ["Your Habit Ladder\n"]
+        for pid in PIDS:
+            p = PILLARS[pid]
+            rung = user["ladder"][pid]["rung"]
+            days = user["ladder"][pid]["days"]
+            total = len(LADDER[pid])
+            stars = "⭐"*(rung+1) + "☆"*(total-rung-1)
+            lines.append(f"{p['emoji']} {p['name']} {stars} - {days} days")
+        await q.edit_message_text("\n".join(lines))
+
+    # ── Questionnaire ──
+    elif data.startswith("q_"):
+        parts = data.split("_", 2)
+        q_id = parts[1]
+        a_idx = int(parts[2])
+        q_data = next((q for q in QUESTIONNAIRE if q["id"]==q_id), None)
+        if not q_data:
+            return
+        answer = q_data["answers"][a_idx]
+        user["q_answers"][q_id] = {"answer": answer["text"], "profile": answer["profile"], "score": answer["score"]}
+
+        # Apply pillar score if applicable
+        if q_data["pillar"] and answer["score"]:
+            user["scores"][q_data["pillar"]] = answer["score"]
+
+        # Apply profile data
+        if q_id == "age":
+            user["profile"]["age"] = answer["profile"]
+        elif q_id == "sex":
+            user["profile"]["sex"] = answer["profile"]
+        elif q_id == "conditions":
+            if answer["profile"] != "no conditions":
+                user["profile"]["conditions"] = [answer["profile"]]
+        elif q_id == "goal":
+            if answer["profile"] not in user.get("personal_goals",[]):
+                user["personal_goals"] = [answer["profile"]]
+
+        # Next question or finish
+        next_idx = next_question_idx(q_id)
+        if next_idx is not None:
+            user["q_index"] = next_idx
+            next_q = QUESTIONNAIRE[next_idx]
+            total = len(QUESTIONNAIRE)
+            save_users()
+            await q.edit_message_text(
+                f"Question {next_idx+1} of {total}\n{next_q['emoji']} {next_q['question']}",
+                reply_markup=get_q_keyboard(next_q)
+            )
+        else:
+            # All questions answered — finish setup
+            user["step"] = "active"
+            user["onboarding"] = None
+            save_users()
+
+            # Build summary
+            ranked = sorted(PIDS, key=lambda p: user["scores"].get(p, 3))
+            weakest = PILLARS[ranked[0]]
+            goal = user.get("personal_goals",["building better habits"])[0]
+
+            try:
+                summary = await groq(
+                    f"User {user['name']} completed their CoreSix profile. "
+                    f"Pillar scores: {', '.join([f'{PILLARS[p]["name"]}:{user["scores"].get(p,"?")}' for p in PIDS])}. "
+                    f"Main goal: {goal}. Age: {user['profile'].get('age')}. "
+                    f"Write a 2-sentence personal welcome that references their weakest area and goal.",
+                    "Warm direct habit coach. Personal welcome. Reference actual data. Max 2 sentences.",
+                    max_tokens=100
+                )
+            except:
+                summary = f"Based on your answers, {weakest['name']} is your biggest opportunity. Let's start there and build from the ground up."
+
+            await q.edit_message_text(
+                "Profile complete! Here is what I know about you:\n\n"
+                "Your pillars (weakest first):\n" +
+                "\n".join([f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {'⭐'*user['scores'].get(p,1)}" for p in ranked]) +
+                f"\n\nMain goal: {goal}\n\n{summary}\n\nNow let me set up your reminders.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Set My Reminders", callback_data="show_reminders")],
+                    [InlineKeyboardButton("Skip - Start Now", callback_data="get_habits_now")],
+                ])
+            )
+
+    elif data == "show_reminders":
+        await q.edit_message_text("Set Your Daily Reminders\nTap a time to change it:", reply_markup=reminders_kb(user))
+
+    # ── Onboarding ──
+    elif data == "onboard_skip_goals":
+        user["adding_goal"] = False
+        user["onboarding"] = "timezone"
+        await q.edit_message_text(
+            "Step 2 of 4 - Your Timezone\n\nSo your reminders arrive at the right time.\n\nWhere are you based?",
+            reply_markup=tz_region_kb()
+        )
+
+    elif data.startswith("tz_region_"):
+        region = data.replace("tz_region_","")
+        await q.edit_message_text(f"Pick your city:", reply_markup=tz_city_kb(region))
+
+    elif data.startswith("tz_set_"):
+        city = data.replace("tz_set_","")
+        tz = TIMEZONES.get(city,"UTC")
+        user["timezone"] = tz
+        save_users()
+        if user.get("onboarding") == "timezone":
+            user["onboarding"] = "reminders"
+            await q.edit_message_text(
+                f"Timezone set to {city}!\n\nStep 3 of 4 - Daily Reminders\n\nI will reach out 4 times a day with your habits.\nTap each time to change it.",
+                reply_markup=reminders_kb(user)
+            )
+        else:
+            await q.edit_message_text(f"Timezone updated to {city}!")
+
+    elif data == "save_reminders":
+        user["reminders_active"] = True
+        schedule_reminders(ctx.application, uid)
+        save_users()
+        lines = "\n".join([f"{SLOTS[s]['label']}: {user['reminders'].get(s)}" for s in SLOTS])
+        if user.get("onboarding") == "reminders":
+            user["onboarding"] = "assess"
+            await q.edit_message_text(
+                f"Reminders set!\n{lines}\n\nStep 4 of 4 - Quick Assessment\n\nRate each pillar 1-5 so I know which habits to focus on first.\n1 = struggling   5 = thriving",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Start Assessment", callback_data="assess")],
+                    [InlineKeyboardButton("Skip - Start Now", callback_data="onboard_done")],
+                ])
+            )
+        else:
+            profile = user.get("profile",{})
+            profile_done = all([profile.get("age"), profile.get("sex")])
+            await q.edit_message_text(
+                f"Reminders activated!\n\n{lines}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Set Health Profile", callback_data="profile_start")] if not profile_done else [InlineKeyboardButton("Get Today's Habits", callback_data="get_habits_now")],
+                    [InlineKeyboardButton("Get Today's Habits", callback_data="get_habits_now")] if not profile_done else [],
+                ])
+            )
+
+    elif data == "toggle_reminders":
+        user["reminders_active"] = not user["reminders_active"]
+        save_users()
+        await q.edit_message_text("Reminder Schedule:", reply_markup=reminders_kb(user))
+
+    elif data.startswith("setslot_"):
+        slot = data.replace("setslot_","")
+        user["setting_slot"] = slot
+        current = user["reminders"].get(slot, SLOTS[slot]["default"])
+        await q.edit_message_text(f"Change {SLOTS[slot]['label']} reminder\n\nCurrent: {current}\n\nReply with time in HH:MM format\nExample: 08:30 or 21:00")
+
+    # ── Assessment ──
+    elif data == "assess":
+        user["step"] = "assess"
+        user["scores"] = {}
+        p = PILLARS[PIDS[0]]
+        await q.edit_message_text(
+            f"Rate each pillar 1-5.\n1 = struggling - 5 = thriving\n\n{p['emoji']} {p['name']} - {p['desc']}",
+            reply_markup=score_kb(PIDS[0])
+        )
+
+    elif data.startswith("score_"):
+        _, pid, score = data.split("_")
+        user["scores"][pid] = int(score)
+        scored = list(user["scores"].keys())
+        remaining = [p for p in PIDS if p not in scored]
+        if remaining:
+            p = PILLARS[remaining[0]]
+            await q.edit_message_text(
+                f"{len(scored)}/6 rated\n\n{p['emoji']} {p['name']} - {p['desc']}",
+                reply_markup=score_kb(remaining[0])
+            )
+        else:
+            user["step"] = "active"
+            save_users()
+            ranked = sorted(PIDS, key=lambda p: user["scores"].get(p,3))
+            lines = [f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {user['scores'][p]}/5" for p in ranked]
+            if user.get("onboarding"):
+                user["onboarding"] = None
+                await q.edit_message_text(
+                    "Assessment done!\n\nYour pillars (weakest first):\n" + "\n".join(lines) +
+                    "\n\nI will focus on your 3 weakest pillars first.\nEach pillar has 5 habits to master — one at a time.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("Set Health Profile", callback_data="profile_start")],
+                        [InlineKeyboardButton("Start My Journey!", callback_data="get_habits_now")],
+                    ])
+                )
+            else:
+                await q.edit_message_text(
+                    "Assessment updated!\n\nYour pillars:\n" + "\n".join(lines) +
+                    "\n\nSend /habit to get today's habits."
+                )
+
+    elif data == "onboard_done":
+        user["step"] = "active"
+        user["onboarding"] = None
+        save_users()
+        await q.edit_message_text(
+            f"All set, {user['name']}!\n\nEach of your 3 focus pillars has a habit ladder with 5 rungs.\nMaster each habit at your own pace before unlocking the next.\n\nSend /habit to begin.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Get My First Habits!", callback_data="get_habits_now")]])
+        )
 
     elif data == "get_habits_now":
+        user["step"] = "active"
         user["missed_days_alerted"] = False
-        user["last_active_date"] = datetime.now().strftime("%Y-%m-%d")
-        pids = await ai_pick_pillars(user)
-        habits = await ai_habits(user, pids)
-        user["today_pillars"] = pids
-        user["today_habits"] = habits
-        user["checked"] = {}
+        pids = get_active_pillars(user)
+        today = datetime.now().strftime("%Y-%m-%d")
+        lines = [f"Your habits today - Day {user['streak']+1}\n"]
+        for pid in pids:
+            p = PILLARS[pid]
+            h = get_current_habit(user, pid)
+            rung_info = get_rung_display(user, pid)
+            lines.append(f"{p['emoji']} {p['name']} [Rung 1/5 - Day 1]")
+            lines.append(f"   {h['habit']}")
+            lines.append("")
+        lines.append("Tap a pillar to check in")
+        await q.edit_message_text("\n".join(lines), reply_markup=main_habit_kb(user))
+
+    # ── Goals ──
+    elif data == "add_goal":
+        user["adding_goal"] = True
+        await q.edit_message_text(
+            "Add a Personal Goal\n\nType your goal below.\nExamples:\n- Drink more water\n- Eat more protein\n- Sleep before midnight\n- Walk 10000 steps"
+        )
+
+    elif data == "add_another_goal":
+        user["adding_goal"] = True
+        goals = user.get("personal_goals",[])
+        await q.edit_message_text(
+            f"You have {len(goals)} goal(s):\n" + "\n".join([f"- {g}" for g in goals]) + "\n\nType your next goal:"
+        )
+
+    elif data.startswith("rmgoal_"):
+        idx = int(data.replace("rmgoal_",""))
+        goals = user.get("personal_goals",[])
+        if 0 <= idx < len(goals):
+            goals.pop(idx)
+            user["personal_goals"] = goals
+            save_users()
+            await q.edit_message_text("Goal removed. Send /goals to manage.")
+
+    elif data == "clear_goals":
+        user["personal_goals"] = []
         save_users()
-        lines = ["Back at it. Here are your habits today:\n"]
-        for p in pids:
-            lines.append(f"{PILLARS[p]['emoji']} {PILLARS[p]['name']} - {habits.get(p,'')}")
-        lines.append("\nTap each when done")
-        await q.edit_message_text("\n".join(lines), reply_markup=habit_kb(user))
+        await q.edit_message_text("Goals cleared. Send /goals to add new ones.")
 
     # ── Profile ──
     elif data == "profile_start":
@@ -1388,13 +1220,13 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user["profile_step"] = "fitness"
         save_users()
         await q.edit_message_text(
-            "Health Profile - Step 3 of 7\n\nWhat is your fitness level?",
+            "Health Profile - Step 3 of 7\n\nFitness level?",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Sedentary - little exercise", callback_data="profile_fitness_sedentary")],
-                [InlineKeyboardButton("Lightly active - 1-3x/week", callback_data="profile_fitness_light")],
-                [InlineKeyboardButton("Moderately active - 3-5x/week", callback_data="profile_fitness_moderate")],
-                [InlineKeyboardButton("Very active - 6-7x/week", callback_data="profile_fitness_active")],
-                [InlineKeyboardButton("Athlete - intense daily", callback_data="profile_fitness_athlete")],
+                [InlineKeyboardButton("Sedentary", callback_data="profile_fitness_sedentary")],
+                [InlineKeyboardButton("Lightly active", callback_data="profile_fitness_light")],
+                [InlineKeyboardButton("Moderately active", callback_data="profile_fitness_moderate")],
+                [InlineKeyboardButton("Very active", callback_data="profile_fitness_active")],
+                [InlineKeyboardButton("Athlete", callback_data="profile_fitness_athlete")],
             ])
         )
 
@@ -1403,8 +1235,8 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user["profile_step"] = "conditions"
         save_users()
         await q.edit_message_text(
-            "Health Profile - Step 4 of 7\n\nAny medical conditions?\nType them separated by commas.\n\nExamples: diabetes, hypertension, anxiety, arthritis\n\nOr tap Skip.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip - No conditions", callback_data="profile_skip_conditions")]])
+            "Health Profile - Step 4 of 7\n\nAny medical conditions?\nType them or tap Skip.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip", callback_data="profile_skip_conditions")]])
         )
 
     elif data == "profile_skip_conditions":
@@ -1412,8 +1244,8 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user["profile_step"] = "medications"
         save_users()
         await q.edit_message_text(
-            "Health Profile - Step 5 of 7\n\nAny medications?\nType them separated by commas.\n\nOr tap Skip.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip - No medications", callback_data="profile_skip_medications")]])
+            "Health Profile - Step 5 of 7\n\nAny medications?\nType them or tap Skip.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip", callback_data="profile_skip_medications")]])
         )
 
     elif data == "profile_skip_medications":
@@ -1421,12 +1253,12 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user["profile_step"] = "sleep"
         save_users()
         await q.edit_message_text(
-            "Health Profile - Step 6 of 7\n\nHow is your sleep quality?",
+            "Health Profile - Step 6 of 7\n\nSleep quality?",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Poor - under 5 hours", callback_data="profile_sleep_poor")],
-                [InlineKeyboardButton("Fair - 5-6 hours", callback_data="profile_sleep_fair")],
-                [InlineKeyboardButton("Good - 7-8 hours", callback_data="profile_sleep_good")],
-                [InlineKeyboardButton("Excellent - 8+ hours", callback_data="profile_sleep_excellent")],
+                [InlineKeyboardButton("Poor - under 5h", callback_data="profile_sleep_poor")],
+                [InlineKeyboardButton("Fair - 5-6h", callback_data="profile_sleep_fair")],
+                [InlineKeyboardButton("Good - 7-8h", callback_data="profile_sleep_good")],
+                [InlineKeyboardButton("Excellent - 8h+", callback_data="profile_sleep_excellent")],
             ])
         )
 
@@ -1435,12 +1267,12 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user["profile_step"] = "stress"
         save_users()
         await q.edit_message_text(
-            "Health Profile - Step 7 of 7\n\nWhat is your typical stress level?",
+            "Health Profile - Step 7 of 7\n\nTypical stress level?",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Low - generally relaxed", callback_data="profile_stress_low")],
-                [InlineKeyboardButton("Moderate - some stress", callback_data="profile_stress_moderate")],
-                [InlineKeyboardButton("High - frequently stressed", callback_data="profile_stress_high")],
-                [InlineKeyboardButton("Very high - overwhelmed", callback_data="profile_stress_very_high")],
+                [InlineKeyboardButton("Low", callback_data="profile_stress_low")],
+                [InlineKeyboardButton("Moderate", callback_data="profile_stress_moderate")],
+                [InlineKeyboardButton("High", callback_data="profile_stress_high")],
+                [InlineKeyboardButton("Very high", callback_data="profile_stress_very_high")],
             ])
         )
 
@@ -1451,212 +1283,116 @@ async def handle_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             user["step"] = "active"
             user["onboarding"] = None
         save_users()
-        profile = user["profile"]
         await q.edit_message_text(
-            f"Profile complete!\n\n"
-            f"Age: {profile.get('age')} | Sex: {profile.get('sex')} | Fitness: {profile.get('fitness')}\n"
-            f"Conditions: {', '.join(profile.get('conditions',[])  ) or 'None'}\n"
-            f"Medications: {', '.join(profile.get('medications',[])  ) or 'None'}\n"
-            f"Sleep: {profile.get('sleep_quality')} | Stress: {profile.get('stress_level')}\n\n"
-            "All set! Every habit is now personalised for you.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Get My First Habits Now!", callback_data="get_habits_now")],
-            ])
+            "Profile complete! Every habit from now on is personalised for you.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Get My Habits!", callback_data="get_habits_now")]])
         )
 
-    # ── Onboarding ──
-    elif data == "onboard_skip_goals":
-        user["adding_goal"] = False
-        user["onboarding"] = "reminders"
-        await q.edit_message_text("Step 2 of 4 - Daily Reminders\n\nI will send you habits and nudges 4 times a day.\nTap each time to change it.", reply_markup=reminders_kb(user))
-
-    elif data == "onboard_done_reminders":
-        user["reminders_active"] = True
-        schedule_reminders(ctx.application, uid)
-        user["onboarding"] = "assess"
-        save_users()
-        await q.edit_message_text(
-            "Step 3 of 4 - Quick Assessment\n\nRate each pillar 1-5 to personalise your habits.\n1 = struggling   5 = thriving",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Start Assessment", callback_data="assess")],
-                [InlineKeyboardButton("Skip - Next Step", callback_data="onboard_to_profile")],
-            ])
-        )
-
-    elif data == "onboard_to_profile":
-        user["onboarding"] = "profile"
-        user["profile_step"] = "age"
-        await q.edit_message_text("Step 4 of 4 - Health Profile\n\nThis helps AI personalise habits to your age, health and fitness.\n\nHow old are you? (e.g. 35)\n\nOr tap Skip to finish setup.",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip - Finish Setup", callback_data="onboard_done")]])
-        )
-
-    elif data == "onboard_done":
-        user["step"] = "active"
-        user["onboarding"] = None
-        user["profile_step"] = None
-        save_users()
-        goals = user.get("personal_goals",[])
-        goal_text = "\n".join([f"- {g}" for g in goals]) if goals else "None set"
-        await q.edit_message_text(
-            f"You are all set, {user['name']}!\n\nGoals:\n{goal_text}\n\nTap below to get your first 3 AI-powered habits.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Get My First Habits Now!", callback_data="get_habits_now")],
-            ])
-        )
-
-    elif data == "start_habits_now":
-        user["step"] = "active"
-        save_users()
-        await q.edit_message_text("Send /habit to get your first 3 habits now.")
-
-    # ── Reminders ──
-    elif data == "show_reminders":
-        await q.edit_message_text("Set Your Daily Reminders\nTap a time to change it.", reply_markup=reminders_kb(user))
-
-    elif data == "toggle_reminders":
-        user["reminders_active"] = not user["reminders_active"]
-        save_users()
-        await q.edit_message_text("Your Reminder Schedule\nTap a time to change it:", reply_markup=reminders_kb(user))
-
-    elif data == "save_reminders":
-        user["reminders_active"] = True
-        schedule_reminders(ctx.application, uid)
-        save_users()
-        lines = "\n".join([f"{SLOTS[s]['label']}: {user['reminders'].get(s)}" for s in SLOTS])
-        if user.get("onboarding") == "reminders":
-            user["onboarding"] = "assess"
-            tz = user.get("timezone","UTC")
-            await q.edit_message_text(
-                f"Reminders set! ({tz})\n\n{lines}\n\n"
-                "Step 4 of 5 - Rate Your Pillars\n\n"
-                "How are you doing in each area? 1=struggling  5=thriving\n\n"
-                "Takes 60 seconds and personalises your habits.",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Start Rating Now", callback_data="assess")],
-                    [InlineKeyboardButton("Skip This Step", callback_data="onboard_to_profile")],
-                ])
+# ── REMINDERS ─────────────────────────────────────────────
+async def send_reminder(context):
+    uid = context.job.data["uid"]
+    purpose = context.job.data["purpose"]
+    user = get_user(uid)
+    if not user["reminders_active"] or user["step"] != "active":
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    pids = get_active_pillars(user)
+    done_count = sum(1 for p in pids if user["checked_today"].get(p)==today)
+    total = len(pids)
+    if purpose == "morning":
+        msg = await ai_msg(user, "morning")
+        lines = [f"Good morning, {user['name'] or 'champ'}! {msg}\n"]
+        for pid in pids:
+            p = PILLARS[pid]
+            h = get_current_habit(user, pid)
+            done = user["checked_today"].get(pid) == today
+            rung_info = get_rung_display(user, pid)
+            lines.append(f"{'✅' if done else p['emoji']} {p['name']} [{rung_info}]")
+            if not done:
+                lines.append(f"   {h['habit']}")
+        try:
+            await context.bot.send_message(chat_id=uid, text="\n".join(lines), reply_markup=main_habit_kb(user))
+        except Exception as e:
+            print(f"Reminder err: {e}")
+    else:
+        nudges = {
+            "midday":    f"Midday check — {done_count}/{total} done. Keep going!",
+            "afternoon": f"Afternoon push — {done_count}/{total} habits done. Still time.",
+            "night":     f"Day wrapping up — {done_count}/{total} habits. Streak: {user['streak']}.",
+        }
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=nudges.get(purpose, "Stay on track!"),
+                reply_markup=main_habit_kb(user) if done_count < total else None
             )
-        else:
-            await q.edit_message_text(f"Reminders activated!\n\n{lines}\n\nI will reach out 4 times a day. Send /habit anytime.")
+        except Exception as e:
+            print(f"Reminder err: {e}")
 
-    elif data.startswith("setslot_"):
-        slot = data.replace("setslot_","")
-        user["setting_slot"] = slot
-        current = user["reminders"].get(slot, SLOTS[slot]["default"])
-        await q.edit_message_text(f"Change {SLOTS[slot]['label']} reminder\n\nCurrent: {current}\n\nReply with time in HH:MM format\nExample: 08:30 or 21:00")
+def schedule_reminders(app, uid):
+    user = get_user(uid)
+    try: tz = pytz.timezone(user.get("timezone","UTC"))
+    except: tz = pytz.UTC
+    for job in app.job_queue.get_jobs_by_name(str(uid)):
+        job.schedule_removal()
+    if not user["reminders_active"]: return
+    for slot, info in SLOTS.items():
+        t_str = user["reminders"].get(slot, info["default"])
+        try:
+            h, m = map(int, t_str.split(":"))
+            app.job_queue.run_daily(send_reminder, time=time(hour=h, minute=m, tzinfo=tz), name=str(uid), data={"uid":uid,"purpose":slot})
+        except Exception as e:
+            print(f"Schedule err {slot}: {e}")
 
-    # ── Goals ──
-    elif data == "add_goal":
-        user["adding_goal"] = True
-        await q.edit_message_text("Add a Personal Goal\n\nType your goal below.\nExamples:\n- Drink more water\n- Eat more protein\n- Sleep before midnight\n- Walk 10000 steps")
-
-    elif data == "add_another_goal":
-        user["adding_goal"] = True
-        goals = user.get("personal_goals",[])
-        await q.edit_message_text(f"You have {len(goals)} goal(s) so far:\n" + "\n".join([f"- {g}" for g in goals]) + "\n\nType your next goal:")
-
-    elif data.startswith("rmgoal_"):
-        idx = int(data.replace("rmgoal_",""))
-        goals = user.get("personal_goals",[])
-        if 0 <= idx < len(goals):
-            removed = goals.pop(idx)
-            user["personal_goals"] = goals
-            save_users()
-            await q.edit_message_text(f"Removed: {removed}\n\nSend /goals to manage your goals.")
-
-    elif data == "clear_goals":
-        user["personal_goals"] = []
-        save_users()
-        await q.edit_message_text("All goals cleared. Send /goals to add new ones.")
-
-    # ── Assessment ──
-    elif data == "assess":
-        user["step"] = "assess"
-        user["scores"] = {}
-        p = PILLARS[PIDS[0]]
-        await q.edit_message_text(f"Rate each pillar 1-5.\n1 = struggling - 5 = thriving\n\n{p['emoji']} {p['name']} - {p['desc']}", reply_markup=score_kb(PIDS[0]))
-
-    elif data == "skip_assess":
-        user["step"] = "active"
-        await q.edit_message_text("Got it. Send /habit to get your 3 habits now.")
-
-    elif data.startswith("score_"):
-        _, pid, score = data.split("_")
-        user["scores"][pid] = int(score)
-        scored = list(user["scores"].keys())
-        remaining = [p for p in PIDS if p not in scored]
-        if remaining:
-            p = PILLARS[remaining[0]]
-            await q.edit_message_text(f"{len(scored)}/6 rated\n\n{p['emoji']} {p['name']} - {p['desc']}", reply_markup=score_kb(remaining[0]))
-        else:
-            user["step"] = "active"
-            save_users()
-            ranked = sorted(PIDS, key=lambda p: user["scores"].get(p,3))
-            lines = [f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {user['scores'][p]}/5" for p in ranked]
-            if user.get("onboarding"):
-                await q.edit_message_text(
-                    "Assessment done!\n\nYour pillars (weakest first):\n" + "\n".join(lines) +
-                    "\n\nLast step! Add your health profile so AI personalises habits to your age, conditions and fitness.",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("Set Health Profile", callback_data="onboard_to_profile")],
-                        [InlineKeyboardButton("Skip - Finish Setup", callback_data="onboard_done")],
-                    ])
+async def check_missed_days(context):
+    today_dt = datetime.now()
+    for uid, user in users.items():
+        if user.get("step") != "active": continue
+        last = user.get("last_active_date")
+        if not last: continue
+        try:
+            days_missed = (today_dt - datetime.strptime(last, "%Y-%m-%d")).days
+            if days_missed >= 2 and not user.get("missed_days_alerted"):
+                user["missed_days_alerted"] = True
+                name = user["name"] or "champ"
+                try:
+                    msg = await groq(f"{name} missed {days_missed} days. Streak was {user['streak']}. Short personal message to bring them back. 2 sentences.", "Direct habit coach. Personal outreach. Real talk.")
+                except:
+                    msg = f"{days_missed} days gone, {name}. Your streak is waiting — one habit today brings it back."
+                await context.bot.send_message(
+                    chat_id=uid,
+                    text=f"{msg}\n\nSend /habit to get back on track.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Get Back on Track", callback_data="get_habits_now")]])
                 )
-            else:
-                await q.edit_message_text(
-                    "Assessment done!\n\nYour pillars:\n" + "\n".join(lines) + "\n\nSend /habit to get your first 3 habits."
-                )
+                save_users()
+        except Exception as e:
+            print(f"Missed days err {uid}: {e}")
 
-    # ── Macros ──
-    elif data == "view_macros":
-        uid2 = q.from_user.id
-        user2 = get_user(uid2)
-        today = datetime.now().strftime("%Y-%m-%d")
-        entries = [e for e in user2.get("macro_log",[]) if e["date"]==today]
-        if not entries:
-            await q.edit_message_text("No meals logged today. Send a photo of your food!")
-            return
-        total_cal = sum(e["calories"] for e in entries)
-        total_p = sum(e["protein_g"] for e in entries)
-        total_c = sum(e["carbs_g"] for e in entries)
-        total_f = sum(e["fat_g"] for e in entries)
-        lines = [f"Today - {len(entries)} meals\n"]
-        for i,e in enumerate(entries,1):
-            lines.append(f"{i}. {', '.join(e['foods'])} ({e['time']}) - {e['calories']}kcal")
-        lines.append(f"\nTotal: {total_cal}kcal | P:{total_p}g | C:{total_c}g | F:{total_f}g")
-        await q.edit_message_text("\n".join(lines))
+async def send_weekly_report(context):
+    for uid, user in users.items():
+        if user.get("step") != "active" or not user.get("weekly_history"): continue
+        try:
+            h7 = user["weekly_history"][-7:]
+            days = len(h7)
+            total = sum(len(r.get("pillars",[])) for r in h7)
+            pc = {}
+            for r in h7:
+                for p in r.get("pillars",[]): pc[p] = pc.get(p,0)+1
+            breakdown = "\n".join([f"{PILLARS[p]['emoji']} {PILLARS[p]['name']}: {c}x" for p,c in sorted(pc.items(),key=lambda x:-x[1])])
+            try:
+                report = await groq(f"Weekly report for {user['name']}. {days}/7 days. {total} habits. Pillars: {breakdown}. Honest coaching.", "Direct coach. Max 3 sentences.", max_tokens=150)
+            except:
+                report = f"{days}/7 days. {total} habits done. Keep showing up."
+            await context.bot.send_message(chat_id=uid, text=f"Weekly Report\n\n{days}/7 days - {total} habits\n\n{breakdown}\n\nCoach: {report}")
+        except Exception as e:
+            print(f"Weekly err {uid}: {e}")
 
-    elif data == "prompt_photo":
-        await q.edit_message_text("Send a photo of your next meal and I will analyse it!")
-
-    # ── Habit done ──
-    elif data.startswith("done_"):
-        pid = data.replace("done_","")
-        if pid in user["checked"]: return
-        user["checked"][pid] = True
-        done = len(user["checked"])
-        total = len(user["today_pillars"])
-        if done >= total:
-            user["streak"] += 1
-            today = datetime.now().strftime("%Y-%m-%d")
-            user["last_checkin_date"] = today
-            user["last_active_date"] = today
-            user["missed_days_alerted"] = False
-            user["weekly_history"].append({"date":today,"day_of_week":datetime.now().strftime("%A"),"pillars":user["today_pillars"],"habits":user["today_habits"],"streak":user["streak"]})
-            user["weekly_history"] = user["weekly_history"][-30:]
-            save_users()
-            msg = await ai_msg(user, "all_done")
-            await q.edit_message_text(f"{done}/{total} done - Day {user['streak']} complete!\n\n{msg}")
-        else:
-            await q.edit_message_text(f"{done}/{total} done - keep going!", reply_markup=habit_kb(user))
-
-# ── CHAT ─────────────────────────────────────────────────
+# ── CHAT ──────────────────────────────────────────────────
 async def cmd_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     user = get_user(uid)
     text = update.message.text
 
-    # Profile text inputs
     if user.get("profile_step"):
         step = user["profile_step"]
         if step == "age":
@@ -1667,7 +1403,7 @@ async def cmd_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 user["profile_step"] = "sex"
                 save_users()
                 await update.message.reply_text(
-                    "Health Profile - Step 2 of 7\n\nWhat is your biological sex?",
+                    "Health Profile - Step 2 of 7\n\nBiological sex?",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("Male", callback_data="profile_sex_male")],
                         [InlineKeyboardButton("Female", callback_data="profile_sex_female")],
@@ -1678,36 +1414,29 @@ async def cmd_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Please enter a valid age (e.g. 35)")
             return
         elif step == "conditions":
-            conditions = [c.strip() for c in text.split(",") if c.strip()]
-            user["profile"]["conditions"] = conditions
+            user["profile"]["conditions"] = [c.strip() for c in text.split(",") if c.strip()]
             user["profile_step"] = "medications"
             save_users()
             await update.message.reply_text(
-                f"Got it: {', '.join(conditions)}\n\nStep 5 of 7 - Any medications?\nType them separated by commas, or tap Skip.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip - No medications", callback_data="profile_skip_medications")]])
+                "Got it! Any medications? Type them or tap Skip.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Skip", callback_data="profile_skip_medications")]])
             )
             return
         elif step == "medications":
-            meds = [m.strip() for m in text.split(",") if m.strip()]
-            user["profile"]["medications"] = meds
+            user["profile"]["medications"] = [m.strip() for m in text.split(",") if m.strip()]
             user["profile_step"] = "sleep"
             save_users()
             await update.message.reply_text(
-                f"Got it: {', '.join(meds)}\n\nStep 6 of 7 - How is your sleep quality?",
+                "Got it! Sleep quality?",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("Poor - under 5 hours", callback_data="profile_sleep_poor")],
-                    [InlineKeyboardButton("Fair - 5-6 hours", callback_data="profile_sleep_fair")],
-                    [InlineKeyboardButton("Good - 7-8 hours", callback_data="profile_sleep_good")],
-                    [InlineKeyboardButton("Excellent - 8+ hours", callback_data="profile_sleep_excellent")],
+                    [InlineKeyboardButton("Poor", callback_data="profile_sleep_poor")],
+                    [InlineKeyboardButton("Fair", callback_data="profile_sleep_fair")],
+                    [InlineKeyboardButton("Good", callback_data="profile_sleep_good")],
+                    [InlineKeyboardButton("Excellent", callback_data="profile_sleep_excellent")],
                 ])
             )
             return
-        elif step == "stress":
-            # If they type during stress step, just prompt them to use buttons
-            await update.message.reply_text("Please use the buttons above to select your stress level.")
-            return
 
-    # Reminder time input
     if user.get("setting_slot"):
         slot = user["setting_slot"]
         try:
@@ -1716,22 +1445,14 @@ async def cmd_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             user["reminders"][slot] = f"{h:02d}:{m:02d}"
             user["setting_slot"] = None
             save_users()
-            # Auto show next step based on context
-            if user.get("onboarding") == "reminders":
-                await update.message.reply_text(
-                    f"{SLOTS[slot]['label']} set to {user['reminders'][slot]}\n\nSet your other reminder times or tap Save when ready.",
-                    reply_markup=reminders_kb(user)
-                )
-            else:
-                await update.message.reply_text(
-                    f"{SLOTS[slot]['label']} set to {user['reminders'][slot]}\n\nAll your reminders:",
-                    reply_markup=reminders_kb(user)
-                )
+            await update.message.reply_text(
+                f"{SLOTS[slot]['label']} set to {user['reminders'][slot]}\n\nSet other times or tap Save.",
+                reply_markup=reminders_kb(user)
+            )
         except:
-            await update.message.reply_text("Invalid format. Please send as HH:MM - example: 08:30")
+            await update.message.reply_text("Invalid format. Please send as HH:MM example: 08:30")
         return
 
-    # Goal input
     if user.get("adding_goal"):
         goal = text.strip()
         if len(goal) > 5:
@@ -1745,34 +1466,33 @@ async def cmd_chat(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 user["adding_goal"] = False
                 save_users()
                 if user.get("onboarding") == "goals":
-                    btns = [
-                        [InlineKeyboardButton("Add Another Goal", callback_data="add_another_goal")],
-                        [InlineKeyboardButton("Continue to Reminders →", callback_data="onboard_skip_goals")],
-                    ]
                     await update.message.reply_text(
-                        f"Goal {len(goals)} added!\n\n" +
-                        "\n".join([f"{i+1}. {g}" for i,g in enumerate(goals)]) +
-                        ("\n\nAdd more or continue when ready." if len(goals)<5 else "\n\nMaximum 5 goals reached."),
-                        reply_markup=InlineKeyboardMarkup(btns)
+                        f"Goal {len(goals)} added: {goal}\n\n{'Add another or continue.' if len(goals)<5 else 'Max 5 goals.'}",
+                        reply_markup=InlineKeyboardMarkup([
+                            [InlineKeyboardButton("Add Another Goal", callback_data="add_another_goal")],
+                            [InlineKeyboardButton("Continue to Timezone", callback_data="onboard_skip_goals")],
+                        ])
                     )
                 else:
-                    await update.message.reply_text(
-                        f"Goal added: {goal}\n\nYou now have {len(goals)} goal(s).",
-                        reply_markup=goals_kb(goals)
-                    )
+                    await update.message.reply_text(f"Goal added: {goal}\n\nSend /goals to manage.")
         else:
             await update.message.reply_text("Please describe your goal in a bit more detail.")
         return
 
-    # AI coach chat
-    scores_str = ", ".join([f"{PILLARS[k]['name']}:{v}/5" for k,v in user["scores"].items()]) or "not assessed"
+    # AI coach
     try:
-        reply = await groq(text, f"Direct habit coach for {user['name'] or 'user'}. Streak: {user['streak']}. Scores: {scores_str}. Short punchy texts. Max 2 sentences.", max_tokens=100)
+        scores_str = ", ".join([f"{PILLARS[k]['name']}:{v}/5" for k,v in user["scores"].items()]) or "not assessed"
+        ladder_str = ", ".join([f"{PILLARS[p]['name']} rung {user['ladder'][p]['rung']+1}" for p in PIDS])
+        reply = await groq(
+            text,
+            f"Habit coach for {user['name'] or 'user'}. Streak: {user['streak']}. Scores: {scores_str}. Ladder: {ladder_str}. Short punchy advice. Max 2 sentences.",
+            max_tokens=100
+        )
     except:
         reply = "Keep going. One habit at a time."
     await update.message.reply_text(reply)
 
-# ── MAIN ─────────────────────────────────────────────────
+# ── MAIN ──────────────────────────────────────────────────
 def main():
     import urllib.request, time as _time
     try:
@@ -1787,22 +1507,19 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start",     cmd_start))
     app.add_handler(CommandHandler("habit",     cmd_habit))
+    app.add_handler(CommandHandler("ladder",    cmd_ladder))
     app.add_handler(CommandHandler("status",    cmd_status))
     app.add_handler(CommandHandler("assess",    cmd_assess))
     app.add_handler(CommandHandler("reminders", cmd_reminders))
-    app.add_handler(CommandHandler("timezone",  cmd_timezone))
     app.add_handler(CommandHandler("goals",     cmd_goals))
     app.add_handler(CommandHandler("profile",   cmd_profile))
+    app.add_handler(CommandHandler("timezone",  cmd_timezone))
     app.add_handler(CommandHandler("report",    cmd_report))
-    app.add_handler(CommandHandler("macros",    cmd_macros))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_food_photo))
     app.add_handler(CallbackQueryHandler(handle_cb))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_chat))
 
     app.job_queue.run_daily(send_weekly_report, time=time(hour=8, minute=0, tzinfo=pytz.UTC), days=(6,), name="weekly_report")
-    app.job_queue.run_daily(send_mood_checkin,  time=time(hour=7, minute=0, tzinfo=pytz.UTC), name="mood_checkin")
     app.job_queue.run_daily(check_missed_days,  time=time(hour=10, minute=0, tzinfo=pytz.UTC), name="missed_days")
-    app.job_queue.run_daily(detect_patterns,    time=time(hour=9, minute=0, tzinfo=pytz.UTC), days=(5,), name="patterns")
 
     async def reschedule_on_startup(app):
         for uid, user in users.items():
